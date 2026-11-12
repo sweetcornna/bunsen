@@ -16,8 +16,8 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - { target: aarch64-apple-darwin, os: macos-14, run: true }
-          - { target: x86_64-apple-darwin, os: macos-14, run: false }
+          - { target: aarch64-apple-darwin, os: macos-latest, run: true }
+          - { target: x86_64-apple-darwin, os: macos-latest, run: false }
           - { target: x86_64-unknown-linux-musl, os: ubuntu-24.04, run: true }
           - { target: aarch64-unknown-linux-musl, os: ubuntu-24.04-arm, run: true }
           - { target: x86_64-pc-windows-msvc, os: windows-latest, run: true }
