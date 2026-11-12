@@ -71,7 +71,7 @@ The script downloads the executable for your platform, checks its SHA-256 and in
 | Linux | ARM64 | [outpost-aarch64-unknown-linux-musl.tar.gz](https://github.com/sweetcornna/outpost/releases/latest/download/outpost-aarch64-unknown-linux-musl.tar.gz) |
 | Windows | x86_64 | [outpost-x86_64-pc-windows-msvc.zip](https://github.com/sweetcornna/outpost/releases/latest/download/outpost-x86_64-pc-windows-msvc.zip) |
 
-Unpack it and put `outpost` anywhere on your `PATH`. The Linux builds are statically linked.
+Unpack it and put `outpost` anywhere on your `PATH`. The macOS builds are notarized by Apple; the Linux builds are statically linked.
 
 </details>
 
@@ -206,14 +206,16 @@ The API contract is in [docs/API.md](docs/API.md) and the internal design in [do
 ## FAQ
 
 <details>
-<summary>macOS says the developer cannot be verified</summary>
+<summary>How do I check that the macOS build is genuine?</summary>
 <br>
 
-This does not happen with the install script. If you downloaded the archive with a browser, run this once after unpacking:
+The macOS builds are signed with a Developer ID and notarized by Apple, so a copy downloaded with a browser opens normally. To check it yourself:
 
 ```bash
-xattr -d com.apple.quarantine ./outpost
+spctl -a -vv -t install ./outpost
 ```
+
+The output should include `source=Notarized Developer ID`.
 
 </details>
 

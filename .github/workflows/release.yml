@@ -1,7 +1,8 @@
 name: Release
 
 # 推送 v* 标签时构建各平台的可执行文件并发布到 GitHub Releases。
-# macOS 包在这里只有临时签名；用 Developer ID 签名和公证见 dev/sign-macos.sh。
+# 这里出的 macOS 包只有临时签名。发布后在装有 Developer ID 证书的 Mac 上运行
+# dev/sign-macos.sh <标签>，会签名、公证并替换发布页上的两个 Mac 包和校验和。
 on:
   push:
     tags: ["v*"]

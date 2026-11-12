@@ -75,7 +75,7 @@ irm https://raw.githubusercontent.com/sweetcornna/outpost/main/install.ps1 | iex
 | Linux | ARM64 | [outpost-aarch64-unknown-linux-musl.tar.gz](https://github.com/sweetcornna/outpost/releases/latest/download/outpost-aarch64-unknown-linux-musl.tar.gz) |
 | Windows | x86_64 | [outpost-x86_64-pc-windows-msvc.zip](https://github.com/sweetcornna/outpost/releases/latest/download/outpost-x86_64-pc-windows-msvc.zip) |
 
-解压后把 `outpost` 放进 `PATH` 里的任意目录。Linux 版是静态链接的，不挑发行版。
+解压后把 `outpost` 放进 `PATH` 里的任意目录。macOS 版经过 Apple 公证；Linux 版是静态链接的，不挑发行版。
 
 </details>
 
@@ -210,14 +210,16 @@ claude mcp add outpost -- outpost mcp
 ## 常见问题
 
 <details>
-<summary>macOS 提示“无法验证开发者”</summary>
+<summary>怎么确认下载的 macOS 版是正版</summary>
 <br>
 
-用安装脚本装的不会遇到。如果是用浏览器下载的压缩包，解压后执行一次：
+macOS 版用 Developer ID 签名并经过 Apple 公证，浏览器下载的也能直接打开。想自己核对：
 
 ```bash
-xattr -d com.apple.quarantine ./outpost
+spctl -a -vv -t install ./outpost
 ```
+
+输出里应当有 `source=Notarized Developer ID`。
 
 </details>
 
