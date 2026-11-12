@@ -4,14 +4,14 @@
 
 # Outpost
 
-**把 Claude Code、Codex 这些命令行 Agent 部署到你自己的服务器上。关掉电脑，它们接着干。**
+**开源的 AI 科研工作台。让 Claude Code、Codex 这些 Agent 在你自己的 GPU 服务器上做研究，关掉电脑也不停。**
 
 [![Release](https://img.shields.io/github/v/release/sweetcornna/outpost?color=d97757&label=release)](https://github.com/sweetcornna/outpost/releases/latest)
 [![CI](https://img.shields.io/github/actions/workflow/status/sweetcornna/outpost/ci.yml?branch=main&label=CI)](https://github.com/sweetcornna/outpost/actions/workflows/ci.yml)
 [![License](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
 ![Platforms](https://img.shields.io/badge/platform-macOS%20%7C%20Linux%20%7C%20Windows-lightgrey)
 
-[安装](#安装) · [快速开始](#快速开始) · [科研工作流](#科研工作流) · [命令行与 MCP](#命令行与-mcp) · [English](README.en.md)
+[安装](#安装) · [快速开始](#快速开始) · [科研工作流](#科研工作流) · [作为服务](#作为服务命令行http-与-mcp) · [English](README.en.md)
 
 <img src="docs/images/session.png" alt="会话界面：左边是 Agent 的终端，右边是产物" width="100%">
 
@@ -19,22 +19,24 @@
 
 ## 这是什么
 
-Outpost 是一个跑在本机的工作台。上传 SSH 配置，选一台服务器和一个 Agent，对话就部署在那台机器的 tmux 里：
+Outpost 是一个自托管的科研工作台，定位类似 Claude Science：把 Agent、算力、实验记录和产物放进同一个窗口。它的取舍是：跑在你自己的服务器上，Agent 任选，全部开源。
 
-- **不怕断线**：退出 Outpost、合上电脑，Agent 照常运行；回来接着用，换一台电脑也能找回来。
+- **研究全程有记录**：预登记、运行、指标、结论账本、想法；每条结论都能点回它的证据。
+- **产物看得见**：图、表、PDF、Notebook 自动汇总成画廊，并标出出自哪次运行。
+- **算力是你自己的**：用 SSH 接入实验室的 GPU 服务器，实时看每张卡的占用和使用者。
+- **长任务不怕断线**：对话跑在服务器的 tmux 里，退出、合上电脑都不停；换一台电脑也能找回来。
 - **Agent 任选**：Claude Code、Codex、Gemini CLI、Qwen Code、OpenCode、Cursor Agent、Aider，也可以自己加。
-- **为科研准备**：显卡占用、运行记录、结论账本、图表产物都在一个窗口里。
-- **只有一个可执行文件**：界面、命令行、MCP 服务三种入口，服务器上什么都不用装（有 `tmux` 就行）。
+- **既是工作台，也是服务**：一个可执行文件，同时提供界面、命令行、HTTP 接口和 MCP，别的 Agent 和脚本也能调度它。
 
 ## 功能
 
 <table>
 <tr>
-<td width="50%"><b>一键部署</b><br>写下任务，选服务器、Agent、工作目录，⌘↵。<br><br><img src="docs/images/welcome.png" alt="新对话"></td>
-<td width="50%"><b>服务器与显卡</b><br>拖入 <code>~/.ssh/config</code> 和私钥，自动配对、测连接、探测环境。<br><br><img src="docs/images/servers.png" alt="服务器"></td>
+<td width="50%"><b>科研面板</b><br>运行、结论、想法；每条结论的证据都能点开。<br><br><img src="docs/images/research.png" alt="科研面板"></td>
+<td width="50%"><b>服务器与显卡</b><br>拖入 <code>~/.ssh/config</code> 和私钥，自动配对、测连接、探测环境和显卡。<br><br><img src="docs/images/servers.png" alt="服务器"></td>
 </tr>
 <tr>
-<td><b>科研面板</b><br>运行、结论、想法；每条结论的证据都能点开。<br><br><img src="docs/images/research.png" alt="科研面板"></td>
+<td><b>开始一轮研究</b><br>写下课题，选服务器、Agent、工作目录，⌘↵。科研插件随部署一起下发。<br><br><img src="docs/images/welcome.png" alt="新对话"></td>
 <td><b>概览与接入</b><br>显卡实时占用，以及一条能在任何终端里粘贴的接入命令。<br><br><img src="docs/images/overview.png" alt="概览"></td>
 </tr>
 </table>
@@ -110,7 +112,7 @@ outpost serve
 
 1. **接服务器**。在“服务器”页把 `~/.ssh/config`、私钥、整个 `.ssh` 目录或 zip 拖进去，也可以粘贴配置或手动填。Outpost 自动给每台机器配对密钥并测试连接。
 2. **装 Agent**。点服务器卡片上还没装的 Agent，选一种安装方式，装完在“登录终端”里完成登录。
-3. **开对话**。回到首页写任务，选服务器、Agent、工作目录，按 ⌘↵。部署过程逐步显示：连接 → 检查 tmux → 查找 Agent → 准备目录 → 同步插件 → 启动 → 确认。
+3. **开始研究**。回到首页写课题，选服务器、Agent、工作目录，按 ⌘↵。部署过程逐步显示：连接 → 检查 tmux → 查找 Agent → 准备目录 → 同步插件 → 启动 → 确认。
 4. **干活**。左边是 Agent 的终端，可以直接打字，也可以在下面的输入条里写好一段再发过去；在文件或产物里选中的内容可以“引用”进消息。
 5. **回来接着用**。重新打开 Outpost 会向各台服务器核对状态。Agent 进程退了可以“接续对话”；每个会话都有一条接入命令，在任何终端里粘贴即可。
 
@@ -131,11 +133,24 @@ outpost serve
 
 ## 科研工作流
 
-- **整套插件随部署下发**。内置的 [research 插件](plugins/research)（预登记、先筛选后确认、数字可追溯、独立审计）编进了可执行文件，部署时同步到服务器的 `~/.outpost/plugins/`。密钥、`.env`、实验室档案不会被同步。
+内置的 [research 插件](plugins/research)让 Agent 按一套有约束的流程做研究，而不是想到哪跑到哪：
+
+```mermaid
+flowchart LR
+    idea["想法<br>可证伪的预测"] --> prereg["预登记<br>先写判据"]
+    prereg --> screen["筛选<br>便宜的探索实验"]
+    screen --> confirm["确认<br>多个种子"]
+    confirm --> audit["独立审计"]
+    audit --> ledger["结论账本<br>证据可追溯"]
+    ledger -.-> idea
+```
+
+- **插件随部署下发**。插件编进了可执行文件，部署时同步到服务器的 `~/.outpost/plugins/`；Claude Code 直接加载（`/research:start`、`/research:resume`、`/research:status`），其它 Agent 在首条消息里被指向同一套流程文档。密钥、`.env`、实验室档案不会被同步。
 - **科研面板**读工作目录下的 `research/`：运行（日志、指标、结果页，在跑的自动刷新）、结论账本、想法、总览。
 - **产物**汇总图、表、PDF、Notebook、网页，带缩略图和预览，并标出大概出自哪次运行。
 - **显卡**实时显示每张卡的占用和使用者，避免抢到别人的卡。
 - **主机笔记**：每台服务器一份 `~/.outpost/HOST.md`，记这台机器的规矩和坑。
+- **引用**：在文件或产物里选中一段，随消息一起发给 Agent。
 
 ## 工作原理
 
@@ -162,9 +177,9 @@ flowchart LR
 
 每个对话是服务器上一个 tmux 会话，跑在 Outpost 专用的套接字上，不碰你自己的 tmux。本机只保存服务器列表、密钥和会话索引；会话的元数据同时写在服务器的 `~/.outpost/` 里，所以换一台电脑导入同样的 SSH 配置就能把它们找回来。
 
-## 命令行与 MCP
+## 作为服务：命令行、HTTP 与 MCP
 
-界面能做的事，命令行都能做，加 `--json` 给脚本用。
+界面只是其中一个入口。界面能做的事，命令行和 HTTP 接口都能做，加 `--json` 给脚本用。
 
 ```bash
 outpost import ~/.ssh/config ~/.ssh/id_ed25519
@@ -175,7 +190,7 @@ outpost capture <id> --lines 40
 outpost attach <id>
 ```
 
-作为 MCP 服务，让另一个 Agent 来调度这些云端对话：
+作为 MCP 服务，让另一个 Agent 来调度这些研究会话、读运行记录和产物：
 
 ```bash
 claude mcp add outpost -- outpost mcp
@@ -252,7 +267,7 @@ pnpm -C ui dev
 
 ## 说明
 
-Outpost 是独立的开源项目，与 Anthropic、OpenAI、Google、阿里云、Cursor 等公司没有关联，各 Agent 的名称和商标归其所有者。界面的配色和层次受 Claude Desktop 启发，品牌、图标和代码都是自己的。
+Outpost 是独立的开源项目，与 Anthropic、OpenAI、Google、阿里云、Cursor 等公司没有关联，各产品的名称和商标归其所有者。产品定位受 Claude Science 启发，界面的配色和层次受 Claude Desktop 启发；品牌、图标和代码都是自己的。
 
 ## 许可证
 

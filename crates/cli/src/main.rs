@@ -13,7 +13,7 @@ use std::process::ExitCode;
 use std::sync::Arc;
 
 #[derive(Parser)]
-#[command(name = "outpost", version, about = "在自己的服务器上用 tmux 部署并接入命令行编码代理")]
+#[command(name = "outpost", version, about = "开源科研工作台：在自己的服务器上部署、接入并管理做研究的命令行 Agent")]
 struct Cli {
     /// 以 JSON 输出
     #[arg(long, global = true)]

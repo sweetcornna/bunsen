@@ -134,7 +134,7 @@ export function Welcome() {
       <div className="welcome-inner">
         <h1 className="hero">
           <Logo size={30} />
-          要做什么？
+          今天研究什么？
         </h1>
 
         <div className={cx("composer", busy && "busy")}>
@@ -143,7 +143,7 @@ export function Welcome() {
             className="composer-input"
             rows={3}
             autoFocus
-            placeholder="描述任务…"
+            placeholder="描述课题或任务…"
             value={prompt}
             disabled={busy}
             onChange={(e) => setPrompt(e.target.value)}

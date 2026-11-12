@@ -4,14 +4,14 @@
 
 # Outpost
 
-**Deploy Claude Code, Codex and other CLI agents to your own servers. Close your laptop; they keep working.**
+**An open-source AI research workbench. Let Claude Code, Codex and other agents do research on your own GPU servers, even with your laptop closed.**
 
 [![Release](https://img.shields.io/github/v/release/sweetcornna/outpost?color=d97757&label=release)](https://github.com/sweetcornna/outpost/releases/latest)
 [![CI](https://img.shields.io/github/actions/workflow/status/sweetcornna/outpost/ci.yml?branch=main&label=CI)](https://github.com/sweetcornna/outpost/actions/workflows/ci.yml)
 [![License](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
 ![Platforms](https://img.shields.io/badge/platform-macOS%20%7C%20Linux%20%7C%20Windows-lightgrey)
 
-[Install](#install) · [Quick start](#quick-start) · [Research workflow](#research-workflow) · [CLI and MCP](#cli-and-mcp) · [中文](README.md)
+[Install](#install) · [Quick start](#quick-start) · [Research workflow](#research-workflow) · [As a service](#as-a-service-cli-http-and-mcp) · [中文](README.md)
 
 <img src="docs/images/session.png" alt="A session: the agent's terminal on the left, artifacts on the right" width="100%">
 
@@ -21,22 +21,24 @@
 
 ## What it is
 
-Outpost is a workbench that runs on your machine. Upload an SSH config, pick a server and an agent, and the conversation is deployed into tmux on that server.
+Outpost is a self-hosted research workbench in the spirit of Claude Science: agents, compute, experiment records and artifacts in one window. Its choices are to run on your own servers, work with any agent, and be fully open source.
 
-- **Survives disconnects.** Quit Outpost or close the laptop and the agent keeps running. Come back later, or find it again from another computer.
+- **Research with a record.** Preregistrations, runs, metrics, a claims ledger and ideas. Every claim links back to its evidence.
+- **Artifacts you can see.** Figures, tables, PDFs and notebooks are collected into a gallery that shows which run produced each one.
+- **Your own compute.** Connect your lab's GPU servers over SSH and watch each card's usage and user live.
+- **Long jobs survive disconnects.** Conversations run in tmux on the server. Quit or close the laptop and they continue; find them again from another computer.
 - **Any agent.** Claude Code, Codex, Gemini CLI, Qwen Code, OpenCode, Cursor Agent, Aider, or one you add yourself.
-- **Built for research.** GPU usage, run records, a claims ledger and generated figures in one window.
-- **A single executable.** A web UI, a CLI and an MCP server. Nothing to install on the server beyond `tmux`.
+- **A workbench and a service.** One executable provides the UI, a CLI, an HTTP API and an MCP server, so other agents and scripts can drive it.
 
 ## Features
 
 <table>
 <tr>
-<td width="50%"><b>One-step deploy</b><br>Describe the task, pick a server, an agent and a working directory, then press ⌘↵.<br><br><img src="docs/images/welcome.png" alt="New conversation"></td>
-<td width="50%"><b>Servers and GPUs</b><br>Drop in <code>~/.ssh/config</code> and your keys. Outpost matches keys, tests the connection and probes the machine.<br><br><img src="docs/images/servers.png" alt="Servers"></td>
+<td width="50%"><b>Research panel</b><br>Runs, claims and ideas. Every claim links to its evidence.<br><br><img src="docs/images/research.png" alt="Research panel"></td>
+<td width="50%"><b>Servers and GPUs</b><br>Drop in <code>~/.ssh/config</code> and your keys. Outpost matches keys, tests the connection and probes the machine and its GPUs.<br><br><img src="docs/images/servers.png" alt="Servers"></td>
 </tr>
 <tr>
-<td><b>Research panel</b><br>Runs, claims and ideas. Every claim links to its evidence.<br><br><img src="docs/images/research.png" alt="Research panel"></td>
+<td><b>Start a study</b><br>Describe the question, pick a server, an agent and a working directory, then press ⌘↵. The research plugin ships with the deploy.<br><br><img src="docs/images/welcome.png" alt="New conversation"></td>
 <td><b>Overview and attach</b><br>Live GPU usage, and a command you can paste into any terminal to attach.<br><br><img src="docs/images/overview.png" alt="Overview"></td>
 </tr>
 </table>
@@ -106,7 +108,7 @@ Your browser opens `http://127.0.0.1:7878`.
 
 1. **Add a server.** On the Servers page, drop in `~/.ssh/config`, private keys, a whole `.ssh` directory or a zip. You can also paste a config or fill in the form. Outpost matches a key to each host and tests the connection.
 2. **Install an agent.** Click an agent that is not installed yet on the server card, choose an install method, then sign in from the login terminal.
-3. **Start a conversation.** Describe the task on the home page, pick a server, an agent and a working directory, and press ⌘↵. Each deploy step is shown as it runs.
+3. **Start a study.** Describe the question on the home page, pick a server, an agent and a working directory, and press ⌘↵. Each deploy step is shown as it runs.
 4. **Work.** The agent's terminal is on the left. Type into it directly, or write a longer message in the box below and send it. Text you select in a file or an artifact can be quoted into the message.
 5. **Come back.** Reopening Outpost checks every server for the current state. If the agent process has exited you can resume the conversation, and every session has an attach command that works in any terminal.
 
@@ -127,11 +129,24 @@ Edit these commands, or add your own agent, under Settings → Agent.
 
 ## Research workflow
 
-- **Plugins ship with every deploy.** The bundled [research plugin](plugins/research) (preregistration, screen-then-confirm, traceable numbers, independent audit) is compiled into the executable and synced to `~/.outpost/plugins/` on the server. Keys, `.env` files and lab profiles are never synced.
+The bundled [research plugin](plugins/research) makes the agent follow a constrained process instead of running whatever comes to mind:
+
+```mermaid
+flowchart LR
+    idea["Idea<br>falsifiable prediction"] --> prereg["Preregister<br>criteria first"]
+    prereg --> screen["Screen<br>cheap exploratory runs"]
+    screen --> confirm["Confirm<br>several seeds"]
+    confirm --> audit["Independent audit"]
+    audit --> ledger["Claims ledger<br>traceable evidence"]
+    ledger -.-> idea
+```
+
+- **Plugins ship with every deploy.** The plugin is compiled into the executable and synced to `~/.outpost/plugins/` on the server. Claude Code loads it directly (`/research:start`, `/research:resume`, `/research:status`); other agents are pointed to the same process documents in their first message. Keys, `.env` files and lab profiles are never synced.
 - **The research panel** reads `research/` in the working directory: runs (log, metrics, result page; live runs refresh on their own), the claims ledger, ideas and the overview.
 - **Artifacts** collects figures, tables, PDFs, notebooks and web pages with thumbnails and previews, and shows which run most likely produced each one.
 - **GPUs** show live usage and who is using each card.
 - **Host notes.** One `~/.outpost/HOST.md` per server for that machine's rules and pitfalls.
+- **Quoting.** Select text in a file or an artifact and send it along with your message.
 
 ## How it works
 
@@ -158,9 +173,9 @@ flowchart LR
 
 Each conversation is a tmux session on the server, on a socket that belongs to Outpost and leaves your own tmux alone. Your machine stores the server list, keys and a session index. Session metadata is also written to `~/.outpost/` on the server, so importing the same SSH config on another computer finds the sessions again.
 
-## CLI and MCP
+## As a service: CLI, HTTP and MCP
 
-Everything the UI does is available from the command line. Add `--json` for scripts.
+The UI is only one way in. Everything it does is available from the command line and the HTTP API. Add `--json` for scripts.
 
 ```bash
 outpost import ~/.ssh/config ~/.ssh/id_ed25519
@@ -171,7 +186,7 @@ outpost capture <id> --lines 40
 outpost attach <id>
 ```
 
-As an MCP server, so another agent can manage these remote conversations:
+As an MCP server, so another agent can manage these research sessions and read their runs and artifacts:
 
 ```bash
 claude mcp add outpost -- outpost mcp
@@ -248,7 +263,7 @@ To look at the UI without a server: `bun dev/mock-server.ts`. Tests: `cargo test
 
 ## Notes
 
-Outpost is an independent open-source project and is not affiliated with Anthropic, OpenAI, Google, Alibaba Cloud, Cursor or any other vendor. Agent names and trademarks belong to their owners. The colours and layering of the interface are inspired by Claude Desktop; the brand, icons and code are original.
+Outpost is an independent open-source project and is not affiliated with Anthropic, OpenAI, Google, Alibaba Cloud, Cursor or any other vendor. Agent names and trademarks belong to their owners. The product direction is inspired by Claude Science, and the colours and layering of the interface by Claude Desktop. The brand, icons and code are original.
 
 ## License
 

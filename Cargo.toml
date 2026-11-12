@@ -3,8 +3,11 @@ resolver = "2"
 members = ["crates/core", "crates/cli"]
 
 [workspace.package]
-version = "0.1.0"
+version = "0.1.1"
 edition = "2021"
+license = "MIT"
+repository = "https://github.com/sweetcornna/outpost"
+description = "开源科研工作台：在自己的服务器上部署并管理做研究的命令行 Agent"
 
 [profile.release]
 strip = true
