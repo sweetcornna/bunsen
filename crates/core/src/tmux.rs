@@ -1,11 +1,11 @@
-//! 服务器上 tmux 的脚本片段与输出解析。所有操作都在 `tmux -L outpost` 上。
+//! 服务器上 tmux 的脚本片段与输出解析。所有操作都在 `tmux -L bunsen` 上。
 //! 注意：tmux 会把 `-F` 格式里的制表符输出成 `_`，所以字段分隔用 `|`。
 
 use crate::shell::{quote, quote_path, TMUX};
 use crate::util::{is_short_id, rfc3339_from_unix};
 use std::collections::BTreeMap;
 
-pub const CONF: &str = "# 由 Outpost 写入。Outpost 的会话都跑在专用套接字 tmux -L outpost 上。\n\
+pub const CONF: &str = "# 由 Bunsen 写入。Bunsen 的会话都跑在专用套接字 tmux -L bunsen 上。\n\
 # -q：老版本 tmux 不认识的选项静默忽略，不影响会话启动。\n\
 set -gq mouse on\n\
 set -gq history-limit 50000\n\
@@ -33,12 +33,12 @@ pub fn pane(session: &str) -> String {
     format!("={session}:")
 }
 
-/// 确保 `~/.outpost/` 目录与 tmux.conf 存在（只在缺失时写），输出 `tmux -V`。
+/// 确保 `~/.bunsen/` 目录与 tmux.conf 存在（只在缺失时写），输出 `tmux -V`。
 /// 没有 tmux 时输出 `__OP_NO_TMUX__`。
 pub fn ensure_script() -> String {
     format!(
-        "mkdir -p \"$HOME/.outpost/sessions\" \"$HOME/.outpost/plugins\"\n\
-if [ ! -f \"$HOME/.outpost/tmux.conf\" ]; then cat > \"$HOME/.outpost/tmux.conf\" <<'__OP_CONF_EOF__'\n{CONF}__OP_CONF_EOF__\nfi\n\
+        "mkdir -p \"$HOME/.bunsen/sessions\" \"$HOME/.bunsen/plugins\"\n\
+if [ ! -f \"$HOME/.bunsen/tmux.conf\" ]; then cat > \"$HOME/.bunsen/tmux.conf\" <<'__OP_CONF_EOF__'\n{CONF}__OP_CONF_EOF__\nfi\n\
 if ! command -v tmux >/dev/null 2>&1; then echo __OP_NO_TMUX__; exit 0; fi\n\
 tmux -V 2>/dev/null || echo 'tmux ?'\n"
     )
@@ -47,8 +47,8 @@ tmux -V 2>/dev/null || echo 'tmux ?'\n"
 /// 在新的 tmux 会话里启动命令；会话已存在则以 4 退出。
 pub fn new_session_script(session: &str, workdir: &str, command: &str) -> String {
     format!(
-        "if tmux -L outpost has-session -t {ex} 2>/dev/null; then echo '会话 {session} 已存在' >&2; exit 4; fi\n\
-{TMUX} new-session -d -s {s} -x 200 -y 50 -c {wd} {cmd} \\; source-file \"$HOME/.outpost/tmux.conf\" || exit 5\n",
+        "if tmux -L bunsen has-session -t {ex} 2>/dev/null; then echo '会话 {session} 已存在' >&2; exit 4; fi\n\
+{TMUX} new-session -d -s {s} -x 200 -y 50 -c {wd} {cmd} \\; source-file \"$HOME/.bunsen/tmux.conf\" || exit 5\n",
         ex = quote(&exact(session)),
         s = quote(session),
         wd = quote_path(workdir),
@@ -59,8 +59,8 @@ pub fn new_session_script(session: &str, workdir: &str, command: &str) -> String
 /// 窗格状态：`死|退出码|当前命令`。会话不存在时输出 `__OP_GONE__`。
 pub fn pane_state_script(session: &str) -> String {
     format!(
-        "if ! tmux -L outpost has-session -t {ex} 2>/dev/null; then echo __OP_GONE__; exit 0; fi\n\
-tmux -L outpost list-panes -t {p} -F '#{{pane_dead}}|#{{pane_dead_status}}|#{{pane_current_command}}' | head -n 1\n",
+        "if ! tmux -L bunsen has-session -t {ex} 2>/dev/null; then echo __OP_GONE__; exit 0; fi\n\
+tmux -L bunsen list-panes -t {p} -F '#{{pane_dead}}|#{{pane_dead_status}}|#{{pane_current_command}}' | head -n 1\n",
         ex = quote(&exact(session)),
         p = quote(&pane(session)),
     )
@@ -95,19 +95,19 @@ pub struct RemoteSession {
     pub meta: Option<String>,
 }
 
-/// 一次取回：所有 op-<id> 会话、窗格状态、末尾几行预览、`~/.outpost/sessions/*.json`。
+/// 一次取回：所有 op-<id> 会话、窗格状态、末尾几行预览、`~/.bunsen/sessions/*.json`。
 pub fn status_script(marker: &str) -> String {
     format!(
         "M={m}\n\
 echo \"$M sessions\"\n\
-tmux -L outpost list-sessions -F '#{{session_name}}|#{{session_attached}}|#{{session_activity}}|#{{window_activity}}' 2>/dev/null\n\
+tmux -L bunsen list-sessions -F '#{{session_name}}|#{{session_attached}}|#{{session_activity}}|#{{window_activity}}' 2>/dev/null\n\
 echo \"$M panes\"\n\
-tmux -L outpost list-panes -a -F '#{{session_name}}|#{{pane_dead}}|#{{pane_dead_status}}|#{{pane_current_command}}' 2>/dev/null\n\
-for s in $(tmux -L outpost list-sessions -F '#{{session_name}}' 2>/dev/null | grep -E '^op-[a-z0-9]{{6}}$'); do\n\
+tmux -L bunsen list-panes -a -F '#{{session_name}}|#{{pane_dead}}|#{{pane_dead_status}}|#{{pane_current_command}}' 2>/dev/null\n\
+for s in $(tmux -L bunsen list-sessions -F '#{{session_name}}' 2>/dev/null | grep -E '^op-[a-z0-9]{{6}}$'); do\n\
   echo \"$M preview ${{s#op-}}\"\n\
-  tmux -L outpost capture-pane -p -J -t \"=$s:\" -S -40 2>/dev/null\n\
+  tmux -L bunsen capture-pane -p -J -t \"=$s:\" -S -40 2>/dev/null\n\
 done\n\
-for f in \"$HOME\"/.outpost/sessions/*.json; do\n\
+for f in \"$HOME\"/.bunsen/sessions/*.json; do\n\
   [ -f \"$f\" ] || continue\n\
   n=$(basename \"$f\" .json)\n\
   echo \"$M meta $n\"\n\

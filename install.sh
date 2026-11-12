@@ -1,17 +1,17 @@
 #!/bin/sh
-# Outpost 安装脚本（macOS / Linux）。
-#   curl -fsSL https://raw.githubusercontent.com/sweetcornna/outpost/main/install.sh | sh
+# Bunsen 安装脚本（macOS / Linux）。
+#   curl -fsSL https://raw.githubusercontent.com/sweetcornna/bunsen/main/install.sh | sh
 # 可选环境变量：
-#   OUTPOST_VERSION      要装的版本，例如 v0.1.0（默认最新）
-#   OUTPOST_INSTALL_DIR  安装目录（默认 ~/.local/bin）
+#   BUNSEN_VERSION      要装的版本，例如 v0.1.0（默认最新）
+#   BUNSEN_INSTALL_DIR  安装目录（默认 ~/.local/bin）
 set -eu
 
-repo="sweetcornna/outpost"
-version="${OUTPOST_VERSION:-latest}"
-dir="${OUTPOST_INSTALL_DIR:-$HOME/.local/bin}"
+repo="sweetcornna/bunsen"
+version="${BUNSEN_VERSION:-latest}"
+dir="${BUNSEN_INSTALL_DIR:-$HOME/.local/bin}"
 
 say() { printf '%s\n' "$*"; }
-die() { printf 'outpost: %s\n' "$*" >&2; exit 1; }
+die() { printf 'bunsen: %s\n' "$*" >&2; exit 1; }
 
 case "$(uname -s)" in
   Darwin) os="apple-darwin" ;;
@@ -24,7 +24,7 @@ case "$(uname -m)" in
   *) die "不支持的架构：$(uname -m)" ;;
 esac
 
-asset="outpost-$arch-$os.tar.gz"
+asset="bunsen-$arch-$os.tar.gz"
 if [ "$version" = "latest" ]; then
   base="https://github.com/$repo/releases/latest/download"
 else
@@ -63,11 +63,11 @@ fi
 
 tar -xzf "$tmp/$asset" -C "$tmp"
 mkdir -p "$dir"
-cp "$tmp/outpost" "$dir/outpost.new"
-chmod 755 "$dir/outpost.new"
-mv -f "$dir/outpost.new" "$dir/outpost"
+cp "$tmp/bunsen" "$dir/bunsen.new"
+chmod 755 "$dir/bunsen.new"
+mv -f "$dir/bunsen.new" "$dir/bunsen"
 
-say "已安装：$dir/outpost（$("$dir/outpost" --version 2>/dev/null || echo outpost)）"
+say "已安装：$dir/bunsen（$("$dir/bunsen" --version 2>/dev/null || echo bunsen)）"
 case ":$PATH:" in
   *":$dir:"*) ;;
   *)
@@ -77,4 +77,4 @@ case ":$PATH:" in
     ;;
 esac
 say ""
-say "开始使用：outpost serve"
+say "开始使用：bunsen serve"

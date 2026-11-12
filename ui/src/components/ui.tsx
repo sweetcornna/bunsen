@@ -338,8 +338,9 @@ export function Toasts() {
 export function Logo({ size = 20 }: { size?: number }) {
   return (
     <svg width={size} height={size} viewBox="0 0 32 32" aria-hidden>
-      <path d="M16 4.5l10 5.75v11.5L16 27.5 6 21.75v-11.5z" fill="none" stroke="var(--brand)" strokeWidth="2.2" strokeLinejoin="round" />
-      <circle cx="16" cy="16" r="3.2" fill="var(--brand)" />
+      <path d="M16 3.5c2.6 4.4 7 7.6 7 13.3a7 7 0 0 1-14 0c0-5.7 4.4-8.9 7-13.3z" fill="none" stroke="var(--brand)" strokeWidth="2.2" strokeLinejoin="round" />
+      <path d="M16 13.2c1.3 2.1 3 3.4 3 5.8a3 3 0 0 1-6 0c0-2.4 1.7-3.7 3-5.8z" fill="var(--brand)" />
+      <path d="M11 28.2h10" stroke="var(--brand)" strokeWidth="2.2" strokeLinecap="round" />
     </svg>
   );
 }

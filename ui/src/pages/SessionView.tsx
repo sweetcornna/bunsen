@@ -33,9 +33,9 @@ export function SessionView({ id }: { id: string }) {
   const toast = useApp((s) => s.toast);
   const fail = useApp((s) => s.fail);
 
-  const [tab, setTab] = useState<Tab>(() => loadLocal<Tab>("outpost.tab", "overview"));
+  const [tab, setTab] = useState<Tab>(() => loadLocal<Tab>("bunsen.tab", "overview"));
   const [opened, setOpened] = useState<Set<Tab>>(() => new Set([tab]));
-  const [side, setSide] = useState(() => loadLocal("outpost.side", true));
+  const [side, setSide] = useState(() => loadLocal("bunsen.side", true));
   const [termEpoch, setTermEpoch] = useState(0);
   const [busy, setBusy] = useState(false);
   const [research, setResearch] = useState<Research | null>(null);
@@ -94,10 +94,10 @@ export function SessionView({ id }: { id: string }) {
   const pickTab = (t: Tab) => {
     setTab(t);
     setOpened((prev) => new Set(prev).add(t));
-    saveLocal("outpost.tab", t);
+    saveLocal("bunsen.tab", t);
     if (!side) {
       setSide(true);
-      saveLocal("outpost.side", true);
+      saveLocal("bunsen.side", true);
     }
   };
 
@@ -183,7 +183,7 @@ export function SessionView({ id }: { id: string }) {
             label={side ? "收起工作区" : "展开工作区"}
             onClick={() => {
               setSide(!side);
-              saveLocal("outpost.side", !side);
+              saveLocal("bunsen.side", !side);
             }}
           >
             {side ? <PanelRightClose size={15} /> : <PanelRightOpen size={15} />}
@@ -196,7 +196,7 @@ export function SessionView({ id }: { id: string }) {
         </div>
       </header>
 
-      <PanelGroup direction="horizontal" autoSaveId="outpost.session.split" className="session-body">
+      <PanelGroup direction="horizontal" autoSaveId="bunsen.session.split" className="session-body">
         <Panel defaultSize={56} minSize={30} className="pane">
           {attachable ? (
             <>

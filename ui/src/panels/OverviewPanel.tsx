@@ -73,8 +73,8 @@ export function OverviewPanel({ session, server, agent, active }: { session: Ses
           </IconButton>
         </div>
         <div className="codeline">
-          <code>outpost attach {session.id}</code>
-          <IconButton label="复制" onClick={() => copy(`outpost attach ${session.id}`, "命令")}>
+          <code>bunsen attach {session.id}</code>
+          <IconButton label="复制" onClick={() => copy(`bunsen attach ${session.id}`, "命令")}>
             <Copy size={13} />
           </IconButton>
         </div>

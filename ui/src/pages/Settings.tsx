@@ -149,7 +149,7 @@ export function Settings() {
             <h3>关于</h3>
             <dl className="facts">
               <dt>版本</dt>
-              <dd>Outpost {meta.version}{meta.dev ? "（开发模式）" : ""}</dd>
+              <dd>Bunsen {meta.version}{meta.dev ? "（开发模式）" : ""}</dd>
               <dt>数据目录</dt>
               <dd className="mono">{meta.data_dir}</dd>
             </dl>

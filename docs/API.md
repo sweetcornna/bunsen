@@ -1,11 +1,11 @@
-# Outpost 接口约定（v1）
+# Bunsen 接口约定（v1）
 
 前端（`ui/`）与核心（`crates/`）之间唯一的约定。两边都只照这份文档写；要改接口先改这里。
 
 ## 0. 总则
 
 - 服务只监听 `127.0.0.1:<port>`（默认 7878）。
-- **鉴权**：启动时生成随机令牌。所有 `/api/*` 请求带请求头 `x-outpost-token: <token>`；WebSocket 用查询参数 `?token=<token>`。缺失或不符返回 401。
+- **鉴权**：启动时生成随机令牌。所有 `/api/*` 请求带请求头 `x-bunsen-token: <token>`；WebSocket 用查询参数 `?token=<token>`。缺失或不符返回 401。
 - **防跨站**：`Host` 头不是 `127.0.0.1:<port>` 或 `localhost:<port>` 的请求一律 403。带 `Origin` 头时必须与服务同源；`--dev` 模式下额外放行 `http://localhost:5173` 与 `http://127.0.0.1:5173`。
 - 界面入口：`GET /` 返回内嵌的 `ui/dist`（单页应用，未知路径回落到 `index.html`）。服务启动时打印并打开 `http://127.0.0.1:<port>/#token=<token>`；前端从地址片段读令牌，存进 `sessionStorage` 后把片段抹掉。`--dev` 模式令牌固定为 `dev`。
 - 请求与响应体都是 JSON（UTF-8），字段名 `snake_case`，时间是 RFC 3339 字符串。
@@ -251,7 +251,7 @@ type ImportResult = {
 
 ## 9. 数据目录
 
-本机（macOS `~/Library/Application Support/outpost`，Linux `~/.local/share/outpost`，可用 `OUTPOST_DATA_DIR` 覆盖）：
+本机（macOS `~/Library/Application Support/bunsen`，Linux `~/.local/share/bunsen`，可用 `BUNSEN_DATA_DIR` 覆盖）：
 
 ```
 config.toml      设置（不含密钥）
@@ -263,29 +263,29 @@ ssh/config       生成的 ssh 配置：每台服务器一个 “Host <别名> o
 ssh/known_hosts
 ```
 
-ControlMaster 套接字放在 `~/.cache/outpost/cm/`（路径要短）。
+ControlMaster 套接字放在 `~/.cache/bunsen/cm/`（路径要短）。
 
-服务器上（都在 `~/.outpost/` 下，不碰别处）：
+服务器上（都在 `~/.bunsen/` 下，不碰别处）：
 
 ```
-tmux.conf            专用配置；所有会话都跑在专用套接字 `tmux -L outpost` 上
+tmux.conf            专用配置；所有会话都跑在专用套接字 `tmux -L bunsen` 上
 sessions/<id>.json   会话元数据（标题、Agent、工作目录、创建时间），供别的机器发现
 plugins/<name>/      同步过来的插件
 ```
 
 ## 10. 命令行与 MCP
 
-同一个可执行文件 `outpost`，三种入口共用核心库：
+同一个可执行文件 `bunsen`，三种入口共用核心库：
 
 ```
-outpost serve [--port 7878] [--no-open] [--dev]
-outpost servers | import <文件...> | test <别名> | probe <别名>
-outpost agents
-outpost sessions [--refresh]
-outpost deploy --server <别名> --agent <id> --workdir <路径> [--title T] [--prompt P] [--yolo] [--plugin research]
-outpost attach <会话id> [--shell]      在当前终端里直接接入
-outpost send <会话id> <文字> | capture <会话id> [--lines N] | stop <会话id>
-outpost mcp                            标准输入输出上的 MCP 服务
+bunsen serve [--port 7878] [--no-open] [--dev]
+bunsen servers | import <文件...> | test <别名> | probe <别名>
+bunsen agents
+bunsen sessions [--refresh]
+bunsen deploy --server <别名> --agent <id> --workdir <路径> [--title T] [--prompt P] [--yolo] [--plugin research]
+bunsen attach <会话id> [--shell]      在当前终端里直接接入
+bunsen send <会话id> <文字> | capture <会话id> [--lines N] | stop <会话id>
+bunsen mcp                            标准输入输出上的 MCP 服务
 ```
 
 所有子命令支持 `--json`。MCP 工具：`server_list` `server_test` `server_probe` `agent_list` `session_list` `session_deploy` `session_send` `session_capture` `session_stop`，参数与返回值同对应的 HTTP 接口。
@@ -359,7 +359,7 @@ type Artifact = {
 
 ### 11.5 主机笔记
 
-每台服务器一份 Markdown：`~/.outpost/HOST.md`。人和 Agent 都可以读写，用来积累“这台机器怎么用”的已验证事实（环境、数据位置、踩过的坑）。
+每台服务器一份 Markdown：`~/.bunsen/HOST.md`。人和 Agent 都可以读写，用来积累“这台机器怎么用”的已验证事实（环境、数据位置、踩过的坑）。
 
 | 方法与路径 | 说明 |
 |---|---|
@@ -395,6 +395,6 @@ type Plugin = {
 - `Agent` 增加 `plugin_prompt: string | null`：Agent 没有 `plugin_dir_flag` 时用它；含 `{dirs}` 占位符（逗号分隔的远程插件目录）。内置 Agent 里除 Claude Code 外都给一个默认值，大意是“科研流程文档在 {dirs}，开始前先读其中的 skills/orchestrator/SKILL.md 与 skills/protocol/SKILL.md 并照做”。
 - `POST /api/sessions` 体增加 `plugins?: string[]`。**省略时 = 全部可用插件**；`[]` 表示不带。旧字段 `plugin` 仍接受：`"research"` 等价 `plugins:["research"]`，`null` 等价 `[]`；两者都给时以 `plugins` 为准。
 - `Session` 增加 `plugins: string[]`；`plugin` 保留，值为 `plugins[0] ?? null`。
-- 部署的 `plugin` 步：把选中的每个插件同步到 `~/.outpost/plugins/<name>/`（先同步到临时目录再原子替换）。**不下发**：`.git` `.claude` `tests` `node_modules` `keys` `secrets` 目录，以及 `id_*` `*.pem` `*.key` `lab.md` `.env*` 文件。`detail` 形如 `research · 8 个技能`。一个都没选时 `skipped`。
+- 部署的 `plugin` 步：把选中的每个插件同步到 `~/.bunsen/plugins/<name>/`（先同步到临时目录再原子替换）。**不下发**：`.git` `.claude` `tests` `node_modules` `keys` `secrets` 目录，以及 `id_*` `*.pem` `*.key` `lab.md` `.env*` 文件。`detail` 形如 `research · 8 个技能`。一个都没选时 `skipped`。
 - 启动命令：Agent 有 `plugin_dir_flag` 时每个插件各追加一次；没有而 `plugin_prompt` 非空时，把它放在初始提示前面（没有初始提示就单独作为初始提示）。`restart` 用同样的参数（接续时不重复加提示）。
-- 命令行：`outpost deploy` 默认带全部插件，`--no-plugins` 关闭，`--plugin <名>` 可多次指定。MCP `session_deploy` 同理（`plugins` 参数）。新增 `outpost plugins`、MCP `plugin_list`。
+- 命令行：`bunsen deploy` 默认带全部插件，`--no-plugins` 关闭，`--plugin <名>` 可多次指定。MCP `session_deploy` 同理（`plugins` 参数）。新增 `bunsen plugins`、MCP `plugin_list`。

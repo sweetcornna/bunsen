@@ -42,7 +42,7 @@ const keys = [
 
 const mk = (id: string, title: string, server: any, agent_id: string, workdir: string, state: string, min: number, extra: any = {}) => ({
   id, title, server_id: server.id, server_alias: server.alias, agent_id, workdir, tmux: `op-${id}`, created_at: ago(min + 300), last_active_at: ago(min), state, exit_status: state === "exited" ? 0 : null, attached: 0, pinned: false, archived: false, plugin: null, yolo: false,
-  preview: "● 已读完 train.py 和 configs/base.yaml\n● 基线 3 个种子跑完，准确率 76.4 ± 0.3\n❯ ", attach_cmd: `ssh -t -p ${server.port} ${server.user}@${server.host} tmux -L outpost attach -t op-${id}`, origin: "local", ...extra,
+  preview: "● 已读完 train.py 和 configs/base.yaml\n● 基线 3 个种子跑完，准确率 76.4 ± 0.3\n❯ ", attach_cmd: `ssh -t -p ${server.port} ${server.user}@${server.host} tmux -L bunsen attach -t op-${id}`, origin: "local", ...extra,
 });
 let sessions: any[] = [
   mk("k7f2qa", "标签平滑对长尾分类的影响", servers[0], "claude-code", "~/work/longtail", "running", 1, { plugin: "research", yolo: true, pinned: true, attached: 1 }),
@@ -78,7 +78,7 @@ async function serveStatic(pathname: string): Promise<Response> {
 }
 
 const BANNER = (title: string) =>
-  `\x1b[2J\x1b[H\x1b[2moutpost · 演示数据\x1b[0m\r\n\r\n\x1b[38;5;173m❯\x1b[0m \x1b[1m${title}\x1b[0m\r\n\r\n\x1b[32m●\x1b[0m 读完 train.py、configs/base.yaml 和上次的 research/STATE.md\r\n\x1b[32m●\x1b[0m 预登记 r03：标签平滑 ε = 0.1，判据 top-1 提升 ≥ 0.5pt（5 个种子）\r\n\x1b[32m●\x1b[0m 基线 3 个种子：\x1b[1m76.4 ± 0.3\x1b[0m\r\n\x1b[33m●\x1b[0m 确认实验在 GPU 2、3 上跑，第 3/5 个种子\r\n\r\n  \x1b[2mseed 1\x1b[0m  77.1    \x1b[2mseed 2\x1b[0m  76.9    \x1b[2mseed 3\x1b[0m  epoch 41/90 \x1b[2m· 剩余约 38 分钟\x1b[0m\r\n\r\n\x1b[2m  等实验结束后我会核对指标、更新结论账本，再继续下一步。\x1b[0m\r\n\r\n\x1b[38;5;173m❯\x1b[0m `;
+  `\x1b[2J\x1b[H\x1b[2mbunsen · 演示数据\x1b[0m\r\n\r\n\x1b[38;5;173m❯\x1b[0m \x1b[1m${title}\x1b[0m\r\n\r\n\x1b[32m●\x1b[0m 读完 train.py、configs/base.yaml 和上次的 research/STATE.md\r\n\x1b[32m●\x1b[0m 预登记 r03：标签平滑 ε = 0.1，判据 top-1 提升 ≥ 0.5pt（5 个种子）\r\n\x1b[32m●\x1b[0m 基线 3 个种子：\x1b[1m76.4 ± 0.3\x1b[0m\r\n\x1b[33m●\x1b[0m 确认实验在 GPU 2、3 上跑，第 3/5 个种子\r\n\r\n  \x1b[2mseed 1\x1b[0m  77.1    \x1b[2mseed 2\x1b[0m  76.9    \x1b[2mseed 3\x1b[0m  epoch 41/90 \x1b[2m· 剩余约 38 分钟\x1b[0m\r\n\r\n\x1b[2m  等实验结束后我会核对指标、更新结论账本，再继续下一步。\x1b[0m\r\n\r\n\x1b[38;5;173m❯\x1b[0m `;
 
 Bun.serve<{ title: string }, never>({
   hostname: "127.0.0.1",
@@ -96,7 +96,7 @@ Bun.serve<{ title: string }, never>({
     const body = m === "POST" || m === "PUT" || m === "PATCH" ? await req.clone().json().catch(() => ({})) : {};
     const seg = p.split("/").slice(2);
 
-    if (p === "/api/meta") return json({ version: "0.1.0-demo", data_dir: "~/Library/Application Support/outpost", platform: "macos", dev: true });
+    if (p === "/api/meta") return json({ version: "0.1.0-demo", data_dir: "~/Library/Application Support/bunsen", platform: "macos", dev: true });
     if (p === "/api/settings") {
       if (m === "PUT") settings = body;
       return json(settings);

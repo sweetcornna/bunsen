@@ -38,7 +38,7 @@ export function ArtifactsPanel({ session, active, runs, onQuote, onRun }: { sess
   const [kind, setKind] = useState<ArtifactKind | "all" | "star">("all");
   const [query, setQuery] = useState("");
   const [open, setOpen] = useState<Artifact | null>(null);
-  const starKey = `outpost.stars.${session.id}`;
+  const starKey = `bunsen.stars.${session.id}`;
   const [stars, setStars] = useState<string[]>(() => loadLocal<string[]>(starKey, []));
 
   const load = useCallback(async () => {

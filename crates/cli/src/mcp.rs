@@ -1,7 +1,7 @@
 //! 标准输入输出上的 MCP 服务（JSON-RPC 2.0，一行一条消息）。工具的参数与返回值同对应的 HTTP 接口。
 
-use outpost_core::model::DeployRequest;
-use outpost_core::{Core, Error};
+use bunsen_core::model::DeployRequest;
+use bunsen_core::{Core, Error};
 use serde_json::{json, Value};
 use std::sync::Arc;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
@@ -50,9 +50,9 @@ pub fn tools() -> Value {
              json!({ "session_id": sess, "limit": { "type": "integer", "minimum": 1, "maximum": 1000, "default": 300 } }), &["session_id"]),
         tool("research_show", "科研面板（GET /api/sessions/:id/research）；给 run_id 时返回该次运行详情（GET /api/sessions/:id/research/run）",
              json!({ "session_id": sess, "run_id": { "type": "string" }, "lines": { "type": "integer", "minimum": 1, "maximum": 2000 } }), &["session_id"]),
-        tool("host_notes_get", "读服务器上的主机笔记 ~/.outpost/HOST.md（GET /api/servers/:id/notes）",
+        tool("host_notes_get", "读服务器上的主机笔记 ~/.bunsen/HOST.md（GET /api/servers/:id/notes）",
              json!({ "server_id": sid }), &["server_id"]),
-        tool("host_notes_set", "整体覆盖服务器上的主机笔记 ~/.outpost/HOST.md（PUT /api/servers/:id/notes）。只记验证过的事实",
+        tool("host_notes_set", "整体覆盖服务器上的主机笔记 ~/.bunsen/HOST.md（PUT /api/servers/:id/notes）。只记验证过的事实",
              json!({ "server_id": sid, "text": { "type": "string" } }), &["server_id", "text"]),
         tool("plugin_list", "列出部署时可下发的插件（GET /api/plugins）", json!({}), &[]),
     ])
@@ -143,8 +143,8 @@ async fn handle(core: Arc<Core>, msg: Value) -> Option<Value> {
                 json!({
                     "protocolVersion": proto,
                     "capabilities": { "tools": { "listChanged": false } },
-                    "serverInfo": { "name": "outpost", "version": outpost_core::VERSION },
-                    "instructions": "Outpost：在自己的 Linux 服务器上用 tmux 部署并操作命令行编码代理。先 server_list / server_probe，再 session_deploy，之后用 session_send 与 session_capture 交互。",
+                    "serverInfo": { "name": "bunsen", "version": bunsen_core::VERSION },
+                    "instructions": "Bunsen：在自己的 Linux 服务器上用 tmux 部署并操作命令行编码代理。先 server_list / server_probe，再 session_deploy，之后用 session_send 与 session_capture 交互。",
                 }),
             )
         }

@@ -84,7 +84,7 @@ impl Ssh {
         cmd.stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::piped()).kill_on_drop(true);
         let start = Instant::now();
         let mut child = cmd.spawn().map_err(|e| {
-            Error::internal(format!("无法启动本机的 ssh：{e}")).with_hint("Outpost 依赖系统自带的 OpenSSH 客户端（ssh 命令）")
+            Error::internal(format!("无法启动本机的 ssh：{e}")).with_hint("Bunsen 依赖系统自带的 OpenSSH 客户端（ssh 命令）")
         })?;
         if let Some(mut stdin) = child.stdin.take() {
             // ssh 提前失败时写入会遇到断管，忽略即可，错误从退出码与标准错误里取。

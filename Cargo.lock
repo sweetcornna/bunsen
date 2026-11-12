@@ -169,6 +169,36 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "72f5acc6cb2ba439de613abc23857ec3d78374d8ed5ac84e9d11336e87da8649"
 
 [[package]]
+name = "bunsen-cli"
+version = "0.2.0"
+dependencies = [
+ "axum",
+ "bunsen-core",
+ "clap",
+ "futures-util",
+ "reqwest",
+ "rust-embed",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tokio-tungstenite 0.26.2",
+]
+
+[[package]]
+name = "bunsen-core"
+version = "0.2.0"
+dependencies = [
+ "getrandom",
+ "portable-pty",
+ "rust-embed",
+ "serde",
+ "serde_json",
+ "tokio",
+ "toml",
+ "zip",
+]
+
+[[package]]
 name = "bytes"
 version = "1.12.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -829,36 +859,6 @@ name = "once_cell_polyfill"
 version = "1.70.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "384b8ab6d37215f3c5301a95a4accb5d64aa607f1fcb26a11b5303878451b4fe"
-
-[[package]]
-name = "outpost-cli"
-version = "0.1.1"
-dependencies = [
- "axum",
- "clap",
- "futures-util",
- "outpost-core",
- "reqwest",
- "rust-embed",
- "serde",
- "serde_json",
- "tokio",
- "tokio-tungstenite 0.26.2",
-]
-
-[[package]]
-name = "outpost-core"
-version = "0.1.1"
-dependencies = [
- "getrandom",
- "portable-pty",
- "rust-embed",
- "serde",
- "serde_json",
- "tokio",
- "toml",
- "zip",
-]
 
 [[package]]
 name = "percent-encoding"

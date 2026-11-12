@@ -239,7 +239,7 @@ mod tests {
     #[test]
     fn keygen_line() {
         assert_eq!(
-            parse_keygen_line("256 SHA256:abcDEF+/x outpost-test (ED25519)\n"),
+            parse_keygen_line("256 SHA256:abcDEF+/x bunsen-test (ED25519)\n"),
             Some(("ED25519".into(), "SHA256:abcDEF+/x".into()))
         );
         assert_eq!(
@@ -251,7 +251,7 @@ mod tests {
     #[test]
     fn save_dedupes_by_fingerprint() {
         // 用 ssh-keygen 现场生成一把一次性密钥（不碰 ~/.ssh）。
-        let dir = std::env::temp_dir().join(format!("outpost-unit-keys-{}", short_id()));
+        let dir = std::env::temp_dir().join(format!("bunsen-unit-keys-{}", short_id()));
         let gen = dir.join("gen");
         std::fs::create_dir_all(&gen).unwrap();
         let ok = Command::new("ssh-keygen")

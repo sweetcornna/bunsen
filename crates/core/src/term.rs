@@ -38,7 +38,7 @@ pub fn remote_command(t: &TermTarget, workdir: Option<&str>) -> Option<String> {
         ),
         TermTarget::ServerShell { .. } => return None,
         TermTarget::Install { agent_id, .. } => format!(
-            "{PATH_PRELUDE}; if ! tmux -L outpost has-session -t {ex} 2>/dev/null; then echo '没有正在进行或保留着的安装任务 {s}'; exit 1; fi; exec {TMUX} attach-session -t {ex}",
+            "{PATH_PRELUDE}; if ! tmux -L bunsen has-session -t {ex} 2>/dev/null; then echo '没有正在进行或保留着的安装任务 {s}'; exit 1; fi; exec {TMUX} attach-session -t {ex}",
             ex = quote(&tmux::exact(&tmux::install_session(agent_id))),
             s = tmux::install_session(agent_id),
         ),
@@ -111,7 +111,7 @@ pub fn spawn(program: &str, args: &[String], cols: u16, rows: u16) -> Result<Pty
 
     let (out_tx, out_rx) = mpsc::channel::<Vec<u8>>(64);
     std::thread::Builder::new()
-        .name("outpost-pty-read".into())
+        .name("bunsen-pty-read".into())
         .spawn(move || {
             let mut buf = vec![0u8; 16 * 1024];
             loop {
@@ -131,7 +131,7 @@ pub fn spawn(program: &str, args: &[String], cols: u16, rows: u16) -> Result<Pty
 
     let (in_tx, in_rx) = std::sync::mpsc::channel::<Vec<u8>>();
     std::thread::Builder::new()
-        .name("outpost-pty-write".into())
+        .name("bunsen-pty-write".into())
         .spawn(move || {
             while let Ok(data) = in_rx.recv() {
                 if writer.write_all(&data).and_then(|_| writer.flush()).is_err() {
@@ -143,7 +143,7 @@ pub fn spawn(program: &str, args: &[String], cols: u16, rows: u16) -> Result<Pty
 
     let (exit_tx, exit_rx) = oneshot::channel();
     std::thread::Builder::new()
-        .name("outpost-pty-wait".into())
+        .name("bunsen-pty-wait".into())
         .spawn(move || {
             let code = child.wait().ok().map(|s| s.exit_code());
             let _ = exit_tx.send(code);

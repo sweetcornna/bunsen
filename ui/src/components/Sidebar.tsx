@@ -41,7 +41,7 @@ export function Sidebar({ route, onCollapse, onPalette }: { route: Route; onColl
       <div className="side-head">
         <button type="button" className="brand" onClick={() => go("/")}>
           <Logo size={18} />
-          <span>Outpost</span>
+          <span>Bunsen</span>
         </button>
         <IconButton label="刷新会话状态" onClick={() => void refreshSessions(true)} disabled={refreshing}>
           {refreshing ? <Spinner size={13} /> : <RefreshCw size={14} />}

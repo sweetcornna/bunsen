@@ -7,7 +7,7 @@ import { captureToken } from "./lib/api";
 
 // 先用上次的主题，免得设置读回来之前闪一下。
 try {
-  const t = localStorage.getItem("outpost.theme");
+  const t = localStorage.getItem("bunsen.theme");
   if (t) document.documentElement.dataset.theme = JSON.parse(t);
 } catch {
   /* 用默认的深色 */

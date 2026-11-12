@@ -39,8 +39,8 @@ jobs:
         run: cargo test --workspace --locked
       - name: Smoke
         run: |
-          cargo run --locked -q -p outpost-cli -- --version
-          cargo run --locked -q -p outpost-cli -- plugins
+          cargo run --locked -q -p bunsen-cli -- --version
+          cargo run --locked -q -p bunsen-cli -- plugins
 
   # Windows 上只做构建和不需要服务器的冒烟：单元测试里有一部分要用 sh / bash 实际执行脚本。
   windows:
@@ -62,10 +62,10 @@ jobs:
           pnpm -C ui build
       - uses: Swatinem/rust-cache@v2
       - name: Build
-        run: cargo build --locked -p outpost-cli
+        run: cargo build --locked -p bunsen-cli
       - name: Smoke
         shell: bash
         run: |
-          target/debug/outpost.exe --version
-          target/debug/outpost.exe plugins
-          target/debug/outpost.exe --json agents > /dev/null
+          target/debug/bunsen.exe --version
+          target/debug/bunsen.exe plugins
+          target/debug/bunsen.exe --json agents > /dev/null

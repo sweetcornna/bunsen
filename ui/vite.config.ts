@@ -1,8 +1,8 @@
 import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
 
-// 开发时：`outpost serve --dev --no-open` 在 7878，Vite 在 5173 代理接口与终端通道。
-const backend = process.env.OUTPOST_BACKEND ?? "http://127.0.0.1:7878";
+// 开发时：`bunsen serve --dev --no-open` 在 7878，Vite 在 5173 代理接口与终端通道。
+const backend = process.env.BUNSEN_BACKEND ?? "http://127.0.0.1:7878";
 
 export default defineConfig({
   plugins: [react()],

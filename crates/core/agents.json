@@ -21,7 +21,7 @@
         "cmd": "npm install -g @anthropic-ai/claude-code"
       }
     ],
-    "auth_hint": "在服务器上接入会话后首次运行 claude，按提示用浏览器登录 Claude 账号；也可以在 ~/.outpost/env.sh 里设置 ANTHROPIC_API_KEY。",
+    "auth_hint": "在服务器上接入会话后首次运行 claude，按提示用浏览器登录 Claude 账号；也可以在 ~/.bunsen/env.sh 里设置 ANTHROPIC_API_KEY。",
     "docs_url": "https://docs.anthropic.com/en/docs/claude-code/overview"
   },
   {
@@ -42,7 +42,7 @@
         "cmd": "npm install -g @openai/codex"
       }
     ],
-    "auth_hint": "首次运行 codex 按提示登录 ChatGPT 账号（服务器上可用 codex login --device-auth）；或在 ~/.outpost/env.sh 里设置 OPENAI_API_KEY。",
+    "auth_hint": "首次运行 codex 按提示登录 ChatGPT 账号（服务器上可用 codex login --device-auth）；或在 ~/.bunsen/env.sh 里设置 OPENAI_API_KEY。",
     "docs_url": "https://developers.openai.com/codex/cli"
   },
   {
@@ -63,7 +63,7 @@
         "cmd": "npm install -g @google/gemini-cli"
       }
     ],
-    "auth_hint": "首次运行 gemini 选择用 Google 账号登录；或在 ~/.outpost/env.sh 里设置 GEMINI_API_KEY。",
+    "auth_hint": "首次运行 gemini 选择用 Google 账号登录；或在 ~/.bunsen/env.sh 里设置 GEMINI_API_KEY。",
     "docs_url": "https://github.com/google-gemini/gemini-cli"
   },
   {
@@ -84,7 +84,7 @@
         "cmd": "npm install -g @qwen-code/qwen-code"
       }
     ],
-    "auth_hint": "首次运行 qwen 按提示登录，或在 ~/.outpost/env.sh 里设置 OPENAI_API_KEY、OPENAI_BASE_URL、OPENAI_MODEL。",
+    "auth_hint": "首次运行 qwen 按提示登录，或在 ~/.bunsen/env.sh 里设置 OPENAI_API_KEY、OPENAI_BASE_URL、OPENAI_MODEL。",
     "docs_url": "https://github.com/QwenLM/qwen-code"
   },
   {
@@ -126,7 +126,7 @@
         "cmd": "curl https://cursor.com/install -fsS | bash"
       }
     ],
-    "auth_hint": "在服务器上运行 cursor-agent login 按提示登录；或在 ~/.outpost/env.sh 里设置 CURSOR_API_KEY。",
+    "auth_hint": "在服务器上运行 cursor-agent login 按提示登录；或在 ~/.bunsen/env.sh 里设置 CURSOR_API_KEY。",
     "docs_url": "https://docs.cursor.com/en/cli/overview"
   },
   {
@@ -147,13 +147,13 @@
         "cmd": "curl -LsSf https://aider.chat/install.sh | sh"
       }
     ],
-    "auth_hint": "在 ~/.outpost/env.sh 里设置所用模型服务的密钥，例如 ANTHROPIC_API_KEY 或 OPENAI_API_KEY。",
+    "auth_hint": "在 ~/.bunsen/env.sh 里设置所用模型服务的密钥，例如 ANTHROPIC_API_KEY 或 OPENAI_API_KEY。",
     "docs_url": "https://aider.chat/docs/"
   },
   {
     "id": "shell",
     "name": "纯终端",
-    "vendor": "Outpost",
+    "vendor": "Bunsen",
     "description": "不启动代理，只要一个关掉软件也不会断的持久终端。",
     "detect": "bash",
     "launch": "bash -l",

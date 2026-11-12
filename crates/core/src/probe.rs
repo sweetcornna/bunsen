@@ -205,13 +205,13 @@ pub fn parse_probe(out: &str, agents: &[Agent]) -> Probe {
     }
 }
 
-/// 由探测结果生成的主机笔记初稿（`~/.outpost/HOST.md`）。
+/// 由探测结果生成的主机笔记初稿（`~/.bunsen/HOST.md`）。
 pub fn host_notes_draft(p: &Probe, agents: &[Agent]) -> String {
     let mut s = String::new();
     let host = if p.hostname.is_empty() { "这台服务器" } else { &p.hostname };
     s.push_str(&format!("# {host} 主机笔记\n\n"));
     s.push_str(&format!(
-        "> 由 Outpost 在 {} 根据探测结果生成的初稿，之后不会自动覆盖。人和 Agent 都可以改：只记验证过的事实——环境怎么配、数据在哪、踩过的坑。\n\n",
+        "> 由 Bunsen 在 {} 根据探测结果生成的初稿，之后不会自动覆盖。人和 Agent 都可以改：只记验证过的事实——环境怎么配、数据在哪、踩过的坑。\n\n",
         p.checked_at.get(..10).unwrap_or(&p.checked_at)
     ));
     s.push_str("## 概况\n\n");

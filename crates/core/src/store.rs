@@ -16,36 +16,36 @@ pub struct Paths {
 }
 
 impl Paths {
-    /// `OUTPOST_DATA_DIR` 优先；否则 macOS `~/Library/Application Support/outpost`，
-    /// 其他系统 `$XDG_DATA_HOME/outpost` 或 `~/.local/share/outpost`。
+    /// `BUNSEN_DATA_DIR` 优先；否则 macOS `~/Library/Application Support/bunsen`，
+    /// 其他系统 `$XDG_DATA_HOME/bunsen` 或 `~/.local/share/bunsen`。
     pub fn from_env() -> Result<Paths> {
         let home = std::env::var_os("HOME").map(PathBuf::from);
-        let data = match std::env::var_os("OUTPOST_DATA_DIR").filter(|v| !v.is_empty()) {
+        let data = match std::env::var_os("BUNSEN_DATA_DIR").filter(|v| !v.is_empty()) {
             Some(d) => PathBuf::from(d),
             None => {
                 let home = home.clone().ok_or_else(|| Error::internal("找不到 HOME 目录"))?;
                 if cfg!(target_os = "macos") {
-                    home.join("Library/Application Support/outpost")
+                    home.join("Library/Application Support/bunsen")
                 } else if cfg!(windows) {
-                    std::env::var_os("APPDATA").map(PathBuf::from).unwrap_or(home).join("outpost")
+                    std::env::var_os("APPDATA").map(PathBuf::from).unwrap_or(home).join("bunsen")
                 } else {
                     std::env::var_os("XDG_DATA_HOME")
                         .filter(|v| !v.is_empty())
                         .map(PathBuf::from)
                         .unwrap_or_else(|| home.join(".local/share"))
-                        .join("outpost")
+                        .join("bunsen")
                 }
             }
         };
-        let cm_dir = match std::env::var_os("OUTPOST_CM_DIR").filter(|v| !v.is_empty()) {
+        let cm_dir = match std::env::var_os("BUNSEN_CM_DIR").filter(|v| !v.is_empty()) {
             Some(d) => PathBuf::from(d),
             None => {
-                let d = home.ok_or_else(|| Error::internal("找不到 HOME 目录"))?.join(".cache/outpost/cm");
+                let d = home.ok_or_else(|| Error::internal("找不到 HOME 目录"))?.join(".cache/bunsen/cm");
                 // 套接字路径上限约 104 字节，ssh 还要加 40 位的 %C 和临时后缀；主目录太长时改用 /tmp。
                 if cfg!(unix) && d.as_os_str().len() > 44 {
                     let user = std::env::var("USER").unwrap_or_else(|_| "user".into());
                     let safe: String = user.chars().filter(|c| c.is_ascii_alphanumeric() || *c == '-' || *c == '_').take(16).collect();
-                    PathBuf::from(format!("/tmp/outpost-cm-{safe}"))
+                    PathBuf::from(format!("/tmp/bunsen-cm-{safe}"))
                 } else {
                     d
                 }
@@ -93,7 +93,7 @@ fn read_json<T: DeserializeOwned + Default>(path: &Path) -> Result<T> {
     match std::fs::read(path) {
         Ok(b) if b.iter().all(u8::is_ascii_whitespace) => Ok(T::default()),
         Ok(b) => serde_json::from_slice(&b)
-            .map_err(|e| Error::internal(format!("{} 格式不对：{e}", path.display())).with_hint("可以先备份再删掉这个文件，Outpost 会重新生成")),
+            .map_err(|e| Error::internal(format!("{} 格式不对：{e}", path.display())).with_hint("可以先备份再删掉这个文件，Bunsen 会重新生成")),
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(T::default()),
         Err(e) => Err(e.into()),
     }
@@ -180,7 +180,7 @@ impl Store {
             m.retain(|_, x| !x.is_null());
         }
         let text = toml::to_string(&v).map_err(|e| Error::internal(format!("设置序列化失败：{e}")))?;
-        let body = format!("# Outpost 设置（不含密钥）\n{text}");
+        let body = format!("# Bunsen 设置（不含密钥）\n{text}");
         atomic_write(&self.paths.file(SETTINGS), body.as_bytes(), Some(0o600))?;
         Ok(())
     }
@@ -199,7 +199,7 @@ mod tests {
     use crate::model::Theme;
 
     pub fn temp_paths(tag: &str) -> Paths {
-        let base = std::env::temp_dir().join(format!("outpost-unit-{tag}-{}", crate::util::short_id()));
+        let base = std::env::temp_dir().join(format!("bunsen-unit-{tag}-{}", crate::util::short_id()));
         Paths { data: base.join("data"), cm_dir: base.join("cm") }
     }
 

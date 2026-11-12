@@ -14,7 +14,7 @@ const W = 1440;
 const H = 900;
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
-const profile = mkdtempSync(join(tmpdir(), "outpost-shots-"));
+const profile = mkdtempSync(join(tmpdir(), "bunsen-shots-"));
 const chrome = Bun.spawn(
   [CHROME, "--headless=new", `--remote-debugging-port=${PORT}`, `--user-data-dir=${profile}`, `--window-size=${W},${H}`, "--hide-scrollbars", "--no-first-run", "--disable-gpu", "about:blank"],
   { stdout: "ignore", stderr: "ignore" },
@@ -63,7 +63,7 @@ async function open(hash: string, theme: "dark" | "light" = "dark") {
   await cdp("Page.navigate", { url: "about:blank" });
   await cdp("Page.navigate", { url: `${BASE}/#token=dev` });
   await sleep(700);
-  await js(`localStorage.setItem("outpost.theme", JSON.stringify("${theme}")); location.hash = ${JSON.stringify(hash)}; 1`);
+  await js(`localStorage.setItem("bunsen.theme", JSON.stringify("${theme}")); location.hash = ${JSON.stringify(hash)}; 1`);
   await sleep(300);
   await js(`document.documentElement.dataset.theme = "${theme}"; 1`);
   await sleep(1500);
@@ -85,7 +85,7 @@ try {
   await cdp("Emulation.setDeviceMetricsOverride", { width: W, height: H, deviceScaleFactor: 2, mobile: false });
   await cdp("Emulation.setEmulatedMedia", { features: [{ name: "prefers-color-scheme", value: "dark" }] });
 
-  const sessions = (await (await fetch(`${BASE}/api/sessions`, { headers: { "x-outpost-token": "dev" } })).json()) as { id: string; state: string }[];
+  const sessions = (await (await fetch(`${BASE}/api/sessions`, { headers: { "x-bunsen-token": "dev" } })).json()) as { id: string; state: string }[];
   const sid = (sessions.find((s) => s.state === "running") ?? sessions[0]).id;
 
   await open("/");

@@ -32,7 +32,7 @@ pub fn target(sv: &Server) -> String {
 }
 
 impl Core {
-    /// 按环境变量（`OUTPOST_DATA_DIR`、`OUTPOST_CM_DIR`）打开数据目录。
+    /// 按环境变量（`BUNSEN_DATA_DIR`、`BUNSEN_CM_DIR`）打开数据目录。
     pub fn open() -> Result<Arc<Core>> {
         Self::open_at(Paths::from_env()?)
     }
@@ -402,7 +402,7 @@ impl Core {
         // 主机笔记初稿：文件不存在时才写，之后不再自动覆盖；失败不影响探测结果。
         let draft = probe::host_notes_draft(&p, &agents);
         let script = format!(
-            "mkdir -p \"$HOME/.outpost\" || exit 0\nif [ ! -e \"$HOME/.outpost/HOST.md\" ]; then printf '%s' {} > \"$HOME/.outpost/.HOST.md.tmp\" && mv \"$HOME/.outpost/.HOST.md.tmp\" \"$HOME/.outpost/HOST.md\"; fi\n",
+            "mkdir -p \"$HOME/.bunsen\" || exit 0\nif [ ! -e \"$HOME/.bunsen/HOST.md\" ]; then printf '%s' {} > \"$HOME/.bunsen/.HOST.md.tmp\" && mv \"$HOME/.bunsen/.HOST.md.tmp\" \"$HOME/.bunsen/HOST.md\"; fi\n",
             quote(&draft)
         );
         let _ = self.ssh.run(&target(&sv), &script, OP_TIMEOUT).await;
@@ -413,7 +413,7 @@ impl Core {
 
     pub async fn host_notes(&self, key: &str) -> Result<HostNotes> {
         let sv = self.server(key)?;
-        let script = "if [ -f \"$HOME/.outpost/HOST.md\" ]; then echo __OP_YES__; head -c 262144 \"$HOME/.outpost/HOST.md\"; else echo __OP_NO__; fi\n";
+        let script = "if [ -f \"$HOME/.bunsen/HOST.md\" ]; then echo __OP_YES__; head -c 262144 \"$HOME/.bunsen/HOST.md\"; else echo __OP_NO__; fi\n";
         let out = self.ssh.run(&target(&sv), script, OP_TIMEOUT).await?;
         let raw = String::from_utf8_lossy(&out.stdout).into_owned();
         if let Some(text) = raw.strip_prefix("__OP_YES__\n") {
@@ -431,7 +431,7 @@ impl Core {
         }
         let sv = self.server(key)?;
         let script = format!(
-            "mkdir -p \"$HOME/.outpost\" && printf '%s' {} > \"$HOME/.outpost/.HOST.md.tmp\" && mv \"$HOME/.outpost/.HOST.md.tmp\" \"$HOME/.outpost/HOST.md\" && echo __OP_DONE__\n",
+            "mkdir -p \"$HOME/.bunsen\" && printf '%s' {} > \"$HOME/.bunsen/.HOST.md.tmp\" && mv \"$HOME/.bunsen/.HOST.md.tmp\" \"$HOME/.bunsen/HOST.md\" && echo __OP_DONE__\n",
             quote(text)
         );
         let out = self.ssh.run(&target(&sv), &script, OP_TIMEOUT).await?;
@@ -467,12 +467,12 @@ impl Core {
              if [ $__op_s -eq 0 ]; then echo {ok}; else echo \"安装命令失败（退出码 $__op_s）\"; fi; exec bash",
             banner = quote(&format!("$ {}", inst.cmd)),
             cmd = inst.cmd,
-            ok = quote("安装命令已结束。回到 Outpost 重新探测服务器即可看到结果；这个终端可以继续使用（例如登录代理）。"),
+            ok = quote("安装命令已结束。回到 Bunsen 重新探测服务器即可看到结果；这个终端可以继续使用（例如登录代理）。"),
         );
         let pane_cmd = format!("bash -lc {}", quote(&inner));
         let script = format!(
-            "{ensure}\ntmux -L outpost kill-session -t {ex} 2>/dev/null\n\
-             {TMUX} new-session -d -s {s} -x 200 -y 50 -c \"$HOME\" {cmd} \\; source-file \"$HOME/.outpost/tmux.conf\" || exit 5\n",
+            "{ensure}\ntmux -L bunsen kill-session -t {ex} 2>/dev/null\n\
+             {TMUX} new-session -d -s {s} -x 200 -y 50 -c \"$HOME\" {cmd} \\; source-file \"$HOME/.bunsen/tmux.conf\" || exit 5\n",
             ensure = tmux::ensure_script(),
             ex = quote(&tmux::exact(&name)),
             s = quote(&name),

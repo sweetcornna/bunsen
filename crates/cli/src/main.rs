@@ -1,19 +1,19 @@
-//! `outpost`：本机服务、命令行子命令与 MCP 服务三个入口，共用 outpost-core。
+//! `bunsen`：本机服务、命令行子命令与 MCP 服务三个入口，共用 bunsen-core。
 
 mod http;
 mod mcp;
 
 use clap::{Parser, Subcommand};
-use outpost_core::import::Upload;
-use outpost_core::model::*;
-use outpost_core::term::TermTarget;
-use outpost_core::{Core, Error};
+use bunsen_core::import::Upload;
+use bunsen_core::model::*;
+use bunsen_core::term::TermTarget;
+use bunsen_core::{Core, Error};
 use serde::Serialize;
 use std::process::ExitCode;
 use std::sync::Arc;
 
 #[derive(Parser)]
-#[command(name = "outpost", version, about = "开源科研工作台：在自己的服务器上部署、接入并管理做研究的命令行 Agent")]
+#[command(name = "bunsen", version, about = "开源科研工作台：在自己的服务器上部署、接入并管理做研究的命令行 Agent")]
 struct Cli {
     /// 以 JSON 输出
     #[arg(long, global = true)]
@@ -129,7 +129,7 @@ enum Cmd {
         #[arg(long)]
         lines: Option<u32>,
     },
-    /// 读或写服务器上的主机笔记 ~/.outpost/HOST.md
+    /// 读或写服务器上的主机笔记 ~/.bunsen/HOST.md
     Notes {
         server: String,
         /// 用这个本机文件的内容覆盖主机笔记
@@ -177,7 +177,7 @@ fn state_text(s: SessionState) -> &'static str {
 
 fn print_servers(v: &[Server]) {
     if v.is_empty() {
-        println!("还没有服务器。用 outpost import <ssh 配置> <私钥> 导入。");
+        println!("还没有服务器。用 bunsen import <ssh 配置> <私钥> 导入。");
     }
     for s in v {
         println!(
@@ -230,7 +230,7 @@ async fn serve(core: Arc<Core>, port: u16, no_open: bool, dev: bool) -> Result<(
     let port = listener.local_addr()?.port();
     let token = http::make_token(dev);
     let url = format!("http://127.0.0.1:{port}/#token={token}");
-    println!("Outpost 已启动：{url}");
+    println!("Bunsen 已启动：{url}");
     println!("数据目录：{}", core.paths().data.display());
     use std::io::Write;
     let _ = std::io::stdout().flush();
@@ -382,7 +382,7 @@ async fn run(cli: Cli) -> Result<(), Error> {
                         print_json(&serde_json::json!({ "session": out.session, "steps": out.steps }));
                     } else {
                         println!("已部署会话 {}：{}", out.session.id, out.session.title);
-                        println!("接入：outpost attach {}    或    {}", out.session.id, out.session.attach_cmd);
+                        println!("接入：bunsen attach {}    或    {}", out.session.id, out.session.attach_cmd);
                     }
                 }
                 Err(f) => {

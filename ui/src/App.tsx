@@ -14,7 +14,7 @@ import { Welcome } from "./pages/Welcome";
 function applyTheme(theme: "dark" | "light" | "system") {
   const resolved = theme === "system" ? (window.matchMedia("(prefers-color-scheme: light)").matches ? "light" : "dark") : theme;
   document.documentElement.dataset.theme = resolved;
-  saveLocal("outpost.theme", resolved);
+  saveLocal("bunsen.theme", resolved);
 }
 
 export function App() {
@@ -24,7 +24,7 @@ export function App() {
   const theme = useApp((s) => s.settings?.theme);
   const interval = useApp((s) => s.settings?.status_interval_secs ?? 30);
   const route = useRoute();
-  const [collapsed, setCollapsed] = useState(() => loadLocal("outpost.sidebar.collapsed", false));
+  const [collapsed, setCollapsed] = useState(() => loadLocal("bunsen.sidebar.collapsed", false));
   const [palette, setPalette] = useState(false);
 
   useEffect(() => {
@@ -71,7 +71,7 @@ export function App() {
 
   const toggleSidebar = () => {
     setCollapsed((v) => {
-      saveLocal("outpost.sidebar.collapsed", !v);
+      saveLocal("bunsen.sidebar.collapsed", !v);
       return !v;
     });
   };
@@ -89,11 +89,11 @@ export function App() {
     return (
       <div className="splash">
         <Logo size={28} />
-        <h1>{boot === "unauthorized" ? "缺少访问令牌" : "连不上 Outpost 服务"}</h1>
+        <h1>{boot === "unauthorized" ? "缺少访问令牌" : "连不上 Bunsen 服务"}</h1>
         <p>
           {boot === "unauthorized"
-            ? "用 outpost serve 打印的地址打开（带 #token=…）。"
-            : (bootDetail ?? "确认 outpost serve 还在运行。")}
+            ? "用 bunsen serve 打印的地址打开（带 #token=…）。"
+            : (bootDetail ?? "确认 bunsen serve 还在运行。")}
         </p>
         <Button onClick={() => void init()}>重试</Button>
       </div>

@@ -428,9 +428,9 @@ pub fn valid_run_id(r: &str) -> bool {
         && !r.bytes().all(|b| b == b'.')
 }
 
-/// 远程脚本里“能不能用 python3”的判断。`OUTPOST_REMOTE_NO_PYTHON=1` 强制走 find/stat 退路（测试与排障用）。
+/// 远程脚本里“能不能用 python3”的判断。`BUNSEN_REMOTE_NO_PYTHON=1` 强制走 find/stat 退路（测试与排障用）。
 fn python_test() -> &'static str {
-    if std::env::var("OUTPOST_REMOTE_NO_PYTHON").ok().as_deref() == Some("1") {
+    if std::env::var("BUNSEN_REMOTE_NO_PYTHON").ok().as_deref() == Some("1") {
         "false"
     } else {
         "command -v python3 >/dev/null 2>&1"
@@ -832,7 +832,7 @@ mod tests {
     #[test]
     fn artifact_scripts_run_locally() {
         use std::process::Command;
-        let dir = std::env::temp_dir().join(format!("outpost-unit-art-{}", short_id()));
+        let dir = std::env::temp_dir().join(format!("bunsen-unit-art-{}", short_id()));
         for d in ["figs", "results", ".hidden", "node_modules/x", "a/b/c/d/e/f/g/h/i"] {
             std::fs::create_dir_all(dir.join(d)).unwrap();
         }

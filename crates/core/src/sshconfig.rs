@@ -297,9 +297,9 @@ fn cfg_path(p: &Path) -> String {
     }
 }
 
-/// 生成 Outpost 专用的 ssh 配置。
+/// 生成 Bunsen 专用的 ssh 配置。
 pub fn render(servers: &[Server], keys_dir: &Path, known_hosts: &Path, cm_dir: &Path) -> String {
-    let mut s = String::from("# 由 Outpost 生成，每次服务器记录变化时重写；不要手改。\n\n");
+    let mut s = String::from("# 由 Bunsen 生成，每次服务器记录变化时重写；不要手改。\n\n");
     for sv in servers {
         s.push_str(&format!("Host {} op-{}\n", sv.alias, sv.id));
         s.push_str(&format!("  HostName {}\n", sv.host));
@@ -468,7 +468,7 @@ Match host gpu1
     fn renders_with_quoted_paths() {
         let sv = Server {
             id: "s3k9x2".into(),
-            alias: "outpost-test".into(),
+            alias: "bunsen-test".into(),
             host: "127.0.0.1".into(),
             user: "dev".into(),
             port: 2222,
@@ -485,18 +485,18 @@ Match host gpu1
         };
         let out = render(
             &[sv],
-            Path::new("/Users/x/Library/Application Support/outpost/keys"),
-            Path::new("/Users/x/Library/Application Support/outpost/ssh/known_hosts"),
-            Path::new("/Users/x/.cache/outpost/cm"),
+            Path::new("/Users/x/Library/Application Support/bunsen/keys"),
+            Path::new("/Users/x/Library/Application Support/bunsen/ssh/known_hosts"),
+            Path::new("/Users/x/.cache/bunsen/cm"),
         );
-        assert!(out.contains("Host outpost-test op-s3k9x2\n"));
-        assert!(out.contains("  IdentityFile \"/Users/x/Library/Application Support/outpost/keys/id_test\"\n  IdentitiesOnly yes\n"));
-        assert!(out.contains("  ControlPath \"/Users/x/.cache/outpost/cm/%C\"\n"));
+        assert!(out.contains("Host bunsen-test op-s3k9x2\n"));
+        assert!(out.contains("  IdentityFile \"/Users/x/Library/Application Support/bunsen/keys/id_test\"\n  IdentitiesOnly yes\n"));
+        assert!(out.contains("  ControlPath \"/Users/x/.cache/bunsen/cm/%C\"\n"));
         assert!(out.contains("  StrictHostKeyChecking accept-new\n"));
         assert!(out.contains("  ProxyJump bastion\n"));
         // 生成的配置能被自己的解析器读回。
         let back = parse(&out);
-        let h = find(&back, "outpost-test");
+        let h = find(&back, "bunsen-test");
         assert_eq!(h.port, Some(2222));
         assert_eq!(h.identity_files.len(), 1);
     }

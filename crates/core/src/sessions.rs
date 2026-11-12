@@ -83,7 +83,7 @@ fn dead(id: &str) -> Error {
     Error::conflict(format!("会话 {id} 的代理已经退出")).with_hint("先“重启”代理再发送")
 }
 
-/// 远端元数据 `~/.outpost/sessions/<id>.json`。
+/// 远端元数据 `~/.bunsen/sessions/<id>.json`。
 fn meta_json(s: &Session, extra_args: &Option<String>) -> String {
     serde_json::json!({
         "id": s.id,
@@ -95,14 +95,14 @@ fn meta_json(s: &Session, extra_args: &Option<String>) -> String {
         "plugins": s.plugins,
         "yolo": s.yolo,
         "extra_args": extra_args,
-        "created_by": "outpost",
+        "created_by": "bunsen",
     })
     .to_string()
 }
 
 fn write_meta_script(id: &str, json: &str) -> String {
     format!(
-        "mkdir -p \"$HOME/.outpost/sessions\" && printf '%s\\n' {} > \"$HOME/.outpost/sessions/{id}.json\"\n",
+        "mkdir -p \"$HOME/.bunsen/sessions\" && printf '%s\\n' {} > \"$HOME/.bunsen/sessions/{id}.json\"\n",
         quote(json)
     )
 }
@@ -115,7 +115,7 @@ fn single_line_title(s: &str) -> String {
 impl Core {
     pub fn attach_cmd(&self, alias: &str, id: &str) -> String {
         format!(
-            "ssh -F {} -t {} tmux -L outpost attach-session -t {}",
+            "ssh -F {} -t {} tmux -L bunsen attach-session -t {}",
             quote(&self.paths().ssh_config().to_string_lossy()),
             quote(alias),
             tmux::agent_session(id)
@@ -322,7 +322,7 @@ impl Core {
                 if let Ok(sv) = core.server(&r.session.server_id) {
                     let json = meta_json(&r.session, &r.extra_args);
                     let script = format!(
-                        "if [ -f \"$HOME/.outpost/sessions/{id}.json\" ]; then {}fi\n",
+                        "if [ -f \"$HOME/.bunsen/sessions/{id}.json\" ]; then {}fi\n",
                         write_meta_script(&r.session.id, &json),
                         id = r.session.id
                     );
@@ -342,8 +342,8 @@ impl Core {
     /// 检查会话在且代理活着的脚本前缀。
     fn alive_guard(session: &str) -> String {
         format!(
-            "if ! tmux -L outpost has-session -t {ex} 2>/dev/null; then echo __OP_GONE__; exit 0; fi\n\
-             if [ \"$(tmux -L outpost list-panes -t {p} -F '#{{pane_dead}}' | head -n 1)\" = 1 ]; then echo __OP_DEAD__; exit 0; fi\n",
+            "if ! tmux -L bunsen has-session -t {ex} 2>/dev/null; then echo __OP_GONE__; exit 0; fi\n\
+             if [ \"$(tmux -L bunsen list-panes -t {p} -F '#{{pane_dead}}' | head -n 1)\" = 1 ]; then echo __OP_DEAD__; exit 0; fi\n",
             ex = quote(&tmux::exact(session)),
             p = quote(&tmux::pane(session)),
         )
@@ -368,8 +368,8 @@ impl Core {
         let mut script = Self::alive_guard(&sess);
         if !text.is_empty() {
             script.push_str(&format!(
-                "printf '%s' {} | tmux -L outpost load-buffer -b {buf} - || exit 6\n\
-                 tmux -L outpost paste-buffer -p -d -b {buf} -t {p} || exit 6\n",
+                "printf '%s' {} | tmux -L bunsen load-buffer -b {buf} - || exit 6\n\
+                 tmux -L bunsen paste-buffer -p -d -b {buf} -t {p} || exit 6\n",
                 quote(text)
             ));
         }
@@ -378,7 +378,7 @@ impl Core {
                 // 有些代理在粘贴后立刻收到回车会当成粘贴内容的一部分，稍等一下。
                 script.push_str("sleep 0.3 2>/dev/null || sleep 1\n");
             }
-            script.push_str(&format!("tmux -L outpost send-keys -t {p} Enter || exit 6\n"));
+            script.push_str(&format!("tmux -L bunsen send-keys -t {p} Enter || exit 6\n"));
         }
         script.push_str("echo __OP_DONE__\n");
         let out = self.ssh.run(&target(&sv), &script, OP_TIMEOUT).await?;
@@ -403,7 +403,7 @@ impl Core {
         let sess = tmux::agent_session(&rec.session.id);
         let mut script = Self::alive_guard(&sess);
         let ks: Vec<String> = keys.iter().map(|k| quote(k)).collect();
-        script.push_str(&format!("tmux -L outpost send-keys -t {} {} || exit 6\necho __OP_DONE__\n", quote(&tmux::pane(&sess)), ks.join(" ")));
+        script.push_str(&format!("tmux -L bunsen send-keys -t {} {} || exit 6\necho __OP_DONE__\n", quote(&tmux::pane(&sess)), ks.join(" ")));
         let out = self.ssh.run(&target(&sv), &script, OP_TIMEOUT).await?;
         Self::check_guard(id, &out.text())?;
         if out.code != 0 || !out.text().contains("__OP_DONE__") {
@@ -418,9 +418,9 @@ impl Core {
         let (rec, sv) = self.rec_and_server(id)?;
         let sess = tmux::agent_session(&rec.session.id);
         let script = format!(
-            "if ! tmux -L outpost has-session -t {ex} 2>/dev/null; then echo __OP_GONE__; exit 0; fi\n\
+            "if ! tmux -L bunsen has-session -t {ex} 2>/dev/null; then echo __OP_GONE__; exit 0; fi\n\
              echo __OP_CAP__\n\
-             tmux -L outpost capture-pane -p -J -t {p} -S -{n}\n",
+             tmux -L bunsen capture-pane -p -J -t {p} -S -{n}\n",
             ex = quote(&tmux::exact(&sess)),
             p = quote(&tmux::pane(&sess)),
         );
@@ -465,15 +465,15 @@ impl Core {
             None => None,
         };
         let respawn = match &cmd {
-            Some(c) => format!("tmux -L outpost respawn-pane -k -t {} -c {} {} || exit 5\n", quote(&tmux::pane(&sess)), quote_path(&s.workdir), quote(c)),
-            None => format!("tmux -L outpost respawn-pane -k -t {} || exit 5\n", quote(&tmux::pane(&sess))),
+            Some(c) => format!("tmux -L bunsen respawn-pane -k -t {} -c {} {} || exit 5\n", quote(&tmux::pane(&sess)), quote_path(&s.workdir), quote(c)),
+            None => format!("tmux -L bunsen respawn-pane -k -t {} || exit 5\n", quote(&tmux::pane(&sess))),
         };
         let recreate = match &cmd {
             Some(c) => format!("{}{}", tmux::ensure_script(), tmux::new_session_script(&sess, &s.workdir, c)),
             None => "echo __OP_NOAGENT__; exit 0\n".to_string(),
         };
         let script = format!(
-            "if tmux -L outpost has-session -t {ex} 2>/dev/null; then\n{respawn}else\n{recreate}fi\necho __OP_DONE__\n",
+            "if tmux -L bunsen has-session -t {ex} 2>/dev/null; then\n{respawn}else\n{recreate}fi\necho __OP_DONE__\n",
             ex = quote(&tmux::exact(&sess)),
         );
         let out = self.ssh.run(&target(&sv), &script, OP_TIMEOUT).await?;
@@ -502,7 +502,7 @@ impl Core {
         let (mut rec, sv) = self.rec_and_server(id)?;
         let s = &rec.session;
         let script = format!(
-            "tmux -L outpost kill-session -t {} 2>/dev/null\ntmux -L outpost kill-session -t {} 2>/dev/null\necho __OP_DONE__\n",
+            "tmux -L bunsen kill-session -t {} 2>/dev/null\ntmux -L bunsen kill-session -t {} 2>/dev/null\necho __OP_DONE__\n",
             quote(&tmux::exact(&tmux::agent_session(&s.id))),
             quote(&tmux::exact(&tmux::shell_session(&s.id))),
         );
@@ -532,7 +532,7 @@ impl Core {
         }
         if let Some(sv) = &sv {
             let script = format!(
-                "tmux -L outpost kill-session -t {} 2>/dev/null\ntmux -L outpost kill-session -t {} 2>/dev/null\nrm -f \"$HOME/.outpost/sessions/{}.json\"\necho __OP_DONE__\n",
+                "tmux -L bunsen kill-session -t {} 2>/dev/null\ntmux -L bunsen kill-session -t {} 2>/dev/null\nrm -f \"$HOME/.bunsen/sessions/{}.json\"\necho __OP_DONE__\n",
                 quote(&tmux::exact(&tmux::agent_session(id))),
                 quote(&tmux::exact(&tmux::shell_session(id))),
                 rec.session.id,
@@ -637,7 +637,7 @@ impl Core {
                 if path.is_empty() {
                     let hint = match agent.install.first() {
                         Some(i) => format!("可以在 Agent 面板里一键安装，或在服务器上执行：{}", i.cmd),
-                        None => "确认它已安装并在 PATH 里；Outpost 会额外查找 ~/.local/bin、~/.npm-global/bin、~/.bun/bin、~/.cargo/bin 和 nvm 目录，也可以在服务器的 ~/.outpost/env.sh 里补充 PATH".to_string(),
+                        None => "确认它已安装并在 PATH 里；Bunsen 会额外查找 ~/.local/bin、~/.npm-global/bin、~/.bun/bin、~/.cargo/bin 和 nvm 目录，也可以在服务器的 ~/.bunsen/env.sh 里补充 PATH".to_string(),
                     };
                     return Err(st.fail(Error::new(Code::AgentMissing, format!("服务器上找不到 {}（{}）", agent.name, agent.detect)).with_hint(hint)));
                 }
@@ -727,7 +727,7 @@ impl Core {
         // verify
         st.begin("verify", "确认代理在运行");
         tokio::time::sleep(Duration::from_secs(1)).await;
-        let script = format!("{}tmux -L outpost capture-pane -p -J -t {} -S -20 2>/dev/null\n", tmux::pane_state_script(&sess), quote(&tmux::pane(&sess)));
+        let script = format!("{}tmux -L bunsen capture-pane -p -J -t {} -S -20 2>/dev/null\n", tmux::pane_state_script(&sess), quote(&tmux::pane(&sess)));
         let out = match self.ssh.run(&tg, &script, OP_TIMEOUT).await {
             Ok(o) => o,
             Err(e) => return Err(st.fail(e)),
@@ -740,7 +740,7 @@ impl Core {
         if first == "__OP_GONE__" {
             Self::apply_remote(&mut rec.session, None);
             let _ = self.save_record(rec);
-            return Err(st.fail(Error::internal("tmux 会话启动后马上消失了").with_hint("检查服务器上的 tmux 是否正常（tmux -L outpost ls）")));
+            return Err(st.fail(Error::internal("tmux 会话启动后马上消失了").with_hint("检查服务器上的 tmux 是否正常（tmux -L bunsen ls）")));
         }
         let pane = tmux::parse_pane_line(&first).unwrap_or_default();
         if pane.dead {
@@ -774,7 +774,7 @@ impl Core {
         Ok(DeployOutcome { session: saved, steps: st.list })
     }
 
-    /// 把选中的插件同步到服务器 `~/.outpost/plugins/<name>/`：先在本机展开到 `plugins-cache/`（已过滤），
+    /// 把选中的插件同步到服务器 `~/.bunsen/plugins/<name>/`：先在本机展开到 `plugins-cache/`（已过滤），
     /// 再同步到服务器上的临时目录（优先 rsync，退回 tar 经 ssh 管道），最后替换正式目录。
     async fn sync_plugins(&self, sv: &Server, chosen: &[plugins::Available]) -> Result<String> {
         let cache_root = self.paths().data.join("plugins-cache");
@@ -791,23 +791,23 @@ impl Core {
         }
         let out = self
             .ssh
-            .run(&target(sv), "mkdir -p \"$HOME/.outpost/plugins\" || exit 7\ncommand -v rsync 2>/dev/null || true\n", OP_TIMEOUT)
+            .run(&target(sv), "mkdir -p \"$HOME/.bunsen/plugins\" || exit 7\ncommand -v rsync 2>/dev/null || true\n", OP_TIMEOUT)
             .await?;
         if out.code != 0 {
             return Err(Error::new(Code::SshFailed, format!("无法在服务器上创建插件目录：{}", out.err_line())));
         }
         let remote_rsync = out.text().lines().next().unwrap_or("").trim().to_string();
-        // OUTPOST_SYNC_METHOD=tar 强制走 tar 回退（测试与排障用）。
-        let force_tar = std::env::var("OUTPOST_SYNC_METHOD").ok().as_deref() == Some("tar");
+        // BUNSEN_SYNC_METHOD=tar 强制走 tar 回退（测试与排障用）。
+        let force_tar = std::env::var("BUNSEN_SYNC_METHOD").ok().as_deref() == Some("tar");
         let use_rsync = !force_tar && !remote_rsync.is_empty() && local_has("rsync").await;
         for (name, dir, _) in &staged {
             if use_rsync {
-                self.rsync_dir(sv, dir, &format!(".outpost/plugins/.{name}.tmp/"), &remote_rsync).await?;
+                self.rsync_dir(sv, dir, &format!(".bunsen/plugins/.{name}.tmp/"), &remote_rsync).await?;
             } else {
-                self.tar_dir(sv, dir, &format!(".outpost/plugins/.{name}.tmp")).await?;
+                self.tar_dir(sv, dir, &format!(".bunsen/plugins/.{name}.tmp")).await?;
             }
         }
-        let mut swap = String::from("cd \"$HOME/.outpost/plugins\" || exit 7\n");
+        let mut swap = String::from("cd \"$HOME/.bunsen/plugins\" || exit 7\n");
         for (name, _, _) in &staged {
             let n = quote(name);
             let tmp = quote(&format!(".{name}.tmp"));
@@ -956,6 +956,6 @@ mod tests {
         assert_eq!(j["yolo"], true);
         assert_eq!(j["extra_args"], "--x");
         let script = write_meta_script("abc123", &meta_json(&s, &None));
-        assert!(script.contains("> \"$HOME/.outpost/sessions/abc123.json\""));
+        assert!(script.contains("> \"$HOME/.bunsen/sessions/abc123.json\""));
     }
 }

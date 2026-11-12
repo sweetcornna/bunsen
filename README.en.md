@@ -1,13 +1,13 @@
 <div align="center">
 
-<img src="docs/images/logo.svg" width="84" alt="Outpost">
+<img src="docs/images/logo.svg" width="84" alt="Bunsen">
 
-# Outpost
+# Bunsen
 
 **An open-source AI research workbench. Let Claude Code, Codex and other agents do research on your own GPU servers, even with your laptop closed.**
 
-[![Release](https://img.shields.io/github/v/release/sweetcornna/outpost?color=d97757&label=release)](https://github.com/sweetcornna/outpost/releases/latest)
-[![CI](https://img.shields.io/github/actions/workflow/status/sweetcornna/outpost/ci.yml?branch=main&label=CI)](https://github.com/sweetcornna/outpost/actions/workflows/ci.yml)
+[![Release](https://img.shields.io/github/v/release/sweetcornna/bunsen?color=d97757&label=release)](https://github.com/sweetcornna/bunsen/releases/latest)
+[![CI](https://img.shields.io/github/actions/workflow/status/sweetcornna/bunsen/ci.yml?branch=main&label=CI)](https://github.com/sweetcornna/bunsen/actions/workflows/ci.yml)
 [![License](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
 ![Platforms](https://img.shields.io/badge/platform-macOS%20%7C%20Linux%20%7C%20Windows-lightgrey)
 
@@ -21,7 +21,9 @@
 
 ## What it is
 
-Outpost is a self-hosted research workbench in the spirit of Claude Science: agents, compute, experiment records and artifacts in one window. Its choices are to run on your own servers, work with any agent, and be fully open source.
+Bunsen is a self-hosted research workbench in the spirit of Claude Science: agents, compute, experiment records and artifacts in one window. Its choices are to run on your own servers, work with any agent, and be fully open source.
+
+The name comes from the Bunsen burner, the flame that stays lit on every lab bench.
 
 - **Research with a record.** Preregistrations, runs, metrics, a claims ledger and ideas. Every claim links back to its evidence.
 - **Artifacts you can see.** Figures, tables, PDFs and notebooks are collected into a gallery that shows which run produced each one.
@@ -35,7 +37,7 @@ Outpost is a self-hosted research workbench in the spirit of Claude Science: age
 <table>
 <tr>
 <td width="50%"><b>Research panel</b><br>Runs, claims and ideas. Every claim links to its evidence.<br><br><img src="docs/images/research.png" alt="Research panel"></td>
-<td width="50%"><b>Servers and GPUs</b><br>Drop in <code>~/.ssh/config</code> and your keys. Outpost matches keys, tests the connection and probes the machine and its GPUs.<br><br><img src="docs/images/servers.png" alt="Servers"></td>
+<td width="50%"><b>Servers and GPUs</b><br>Drop in <code>~/.ssh/config</code> and your keys. Bunsen matches keys, tests the connection and probes the machine and its GPUs.<br><br><img src="docs/images/servers.png" alt="Servers"></td>
 </tr>
 <tr>
 <td><b>Start a study</b><br>Describe the question, pick a server, an agent and a working directory, then press ⌘↵. The research plugin ships with the deploy.<br><br><img src="docs/images/welcome.png" alt="New conversation"></td>
@@ -48,16 +50,16 @@ Outpost is a self-hosted research workbench in the spirit of Claude Science: age
 **macOS / Linux**
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/sweetcornna/outpost/main/install.sh | sh
+curl -fsSL https://raw.githubusercontent.com/sweetcornna/bunsen/main/install.sh | sh
 ```
 
 **Windows** (PowerShell)
 
 ```powershell
-irm https://raw.githubusercontent.com/sweetcornna/outpost/main/install.ps1 | iex
+irm https://raw.githubusercontent.com/sweetcornna/bunsen/main/install.ps1 | iex
 ```
 
-The script downloads the executable for your platform, checks its SHA-256 and installs it to `~/.local/bin` (`%LOCALAPPDATA%\Programs\outpost` on Windows). Set `OUTPOST_VERSION=v0.1.0` to pin a version and `OUTPOST_INSTALL_DIR` to change the directory. Run it again to update; delete the file to uninstall.
+The script downloads the executable for your platform, checks its SHA-256 and installs it to `~/.local/bin` (`%LOCALAPPDATA%\Programs\bunsen` on Windows). Set `BUNSEN_VERSION=v0.1.0` to pin a version and `BUNSEN_INSTALL_DIR` to change the directory. Run it again to update; delete the file to uninstall.
 
 <details>
 <summary><b>Manual download</b></summary>
@@ -65,13 +67,13 @@ The script downloads the executable for your platform, checks its SHA-256 and in
 
 | OS | Architecture | Download |
 |---|---|---|
-| macOS | Apple silicon | [outpost-aarch64-apple-darwin.tar.gz](https://github.com/sweetcornna/outpost/releases/latest/download/outpost-aarch64-apple-darwin.tar.gz) |
-| macOS | Intel | [outpost-x86_64-apple-darwin.tar.gz](https://github.com/sweetcornna/outpost/releases/latest/download/outpost-x86_64-apple-darwin.tar.gz) |
-| Linux | x86_64 | [outpost-x86_64-unknown-linux-musl.tar.gz](https://github.com/sweetcornna/outpost/releases/latest/download/outpost-x86_64-unknown-linux-musl.tar.gz) |
-| Linux | ARM64 | [outpost-aarch64-unknown-linux-musl.tar.gz](https://github.com/sweetcornna/outpost/releases/latest/download/outpost-aarch64-unknown-linux-musl.tar.gz) |
-| Windows | x86_64 | [outpost-x86_64-pc-windows-msvc.zip](https://github.com/sweetcornna/outpost/releases/latest/download/outpost-x86_64-pc-windows-msvc.zip) |
+| macOS | Apple silicon | [bunsen-aarch64-apple-darwin.tar.gz](https://github.com/sweetcornna/bunsen/releases/latest/download/bunsen-aarch64-apple-darwin.tar.gz) |
+| macOS | Intel | [bunsen-x86_64-apple-darwin.tar.gz](https://github.com/sweetcornna/bunsen/releases/latest/download/bunsen-x86_64-apple-darwin.tar.gz) |
+| Linux | x86_64 | [bunsen-x86_64-unknown-linux-musl.tar.gz](https://github.com/sweetcornna/bunsen/releases/latest/download/bunsen-x86_64-unknown-linux-musl.tar.gz) |
+| Linux | ARM64 | [bunsen-aarch64-unknown-linux-musl.tar.gz](https://github.com/sweetcornna/bunsen/releases/latest/download/bunsen-aarch64-unknown-linux-musl.tar.gz) |
+| Windows | x86_64 | [bunsen-x86_64-pc-windows-msvc.zip](https://github.com/sweetcornna/bunsen/releases/latest/download/bunsen-x86_64-pc-windows-msvc.zip) |
 
-Unpack it and put `outpost` anywhere on your `PATH`. The macOS builds are notarized by Apple; the Linux builds are statically linked.
+Unpack it and put `bunsen` anywhere on your `PATH`. The macOS builds are notarized by Apple; the Linux builds are statically linked.
 
 </details>
 
@@ -82,12 +84,12 @@ Unpack it and put `outpost` anywhere on your `PATH`. The macOS builds are notari
 Requires stable Rust, Node 22 and pnpm.
 
 ```bash
-git clone https://github.com/sweetcornna/outpost.git
-cd outpost
+git clone https://github.com/sweetcornna/bunsen.git
+cd bunsen
 ./build.sh
 ```
 
-The executable is at `target/release/outpost`.
+The executable is at `target/release/bunsen`.
 
 </details>
 
@@ -101,16 +103,16 @@ The executable is at `target/release/outpost`.
 ## Quick start
 
 ```bash
-outpost serve
+bunsen serve
 ```
 
 Your browser opens `http://127.0.0.1:7878`.
 
-1. **Add a server.** On the Servers page, drop in `~/.ssh/config`, private keys, a whole `.ssh` directory or a zip. You can also paste a config or fill in the form. Outpost matches a key to each host and tests the connection.
+1. **Add a server.** On the Servers page, drop in `~/.ssh/config`, private keys, a whole `.ssh` directory or a zip. You can also paste a config or fill in the form. Bunsen matches a key to each host and tests the connection.
 2. **Install an agent.** Click an agent that is not installed yet on the server card, choose an install method, then sign in from the login terminal.
 3. **Start a study.** Describe the question on the home page, pick a server, an agent and a working directory, and press ⌘↵. Each deploy step is shown as it runs.
 4. **Work.** The agent's terminal is on the left. Type into it directly, or write a longer message in the box below and send it. Text you select in a file or an artifact can be quoted into the message.
-5. **Come back.** Reopening Outpost checks every server for the current state. If the agent process has exited you can resume the conversation, and every session has an attach command that works in any terminal.
+5. **Come back.** Reopening Bunsen checks every server for the current state. If the agent process has exited you can resume the conversation, and every session has an attach command that works in any terminal.
 
 ## Supported agents
 
@@ -141,11 +143,11 @@ flowchart LR
     ledger -.-> idea
 ```
 
-- **Plugins ship with every deploy.** The plugin is compiled into the executable and synced to `~/.outpost/plugins/` on the server. Claude Code loads it directly (`/research:start`, `/research:resume`, `/research:status`); other agents are pointed to the same process documents in their first message. Keys, `.env` files and lab profiles are never synced.
+- **Plugins ship with every deploy.** The plugin is compiled into the executable and synced to `~/.bunsen/plugins/` on the server. Claude Code loads it directly (`/research:start`, `/research:resume`, `/research:status`); other agents are pointed to the same process documents in their first message. Keys, `.env` files and lab profiles are never synced.
 - **The research panel** reads `research/` in the working directory: runs (log, metrics, result page; live runs refresh on their own), the claims ledger, ideas and the overview.
 - **Artifacts** collects figures, tables, PDFs, notebooks and web pages with thumbnails and previews, and shows which run most likely produced each one.
 - **GPUs** show live usage and who is using each card.
-- **Host notes.** One `~/.outpost/HOST.md` per server for that machine's rules and pitfalls.
+- **Host notes.** One `~/.bunsen/HOST.md` per server for that machine's rules and pitfalls.
 - **Quoting.** Select text in a file or an artifact and send it along with your message.
 
 ## How it works
@@ -155,15 +157,15 @@ flowchart LR
     subgraph local["Your machine"]
         ui["Browser UI"]
         cli["CLI / MCP"]
-        op["outpost"]
+        op["bunsen"]
         ui <-->|"HTTP + WebSocket<br>127.0.0.1 + token"| op
         cli --> op
     end
     subgraph server["Your server"]
-        tmux["tmux -L outpost"]
+        tmux["tmux -L bunsen"]
         a1["Claude Code"]
         a2["Codex"]
-        plug["~/.outpost/plugins"]
+        plug["~/.bunsen/plugins"]
         tmux --- a1
         tmux --- a2
     end
@@ -171,25 +173,25 @@ flowchart LR
     op -.->|"rsync / tar"| plug
 ```
 
-Each conversation is a tmux session on the server, on a socket that belongs to Outpost and leaves your own tmux alone. Your machine stores the server list, keys and a session index. Session metadata is also written to `~/.outpost/` on the server, so importing the same SSH config on another computer finds the sessions again.
+Each conversation is a tmux session on the server, on a socket that belongs to Bunsen and leaves your own tmux alone. Your machine stores the server list, keys and a session index. Session metadata is also written to `~/.bunsen/` on the server, so importing the same SSH config on another computer finds the sessions again.
 
 ## As a service: CLI, HTTP and MCP
 
 The UI is only one way in. Everything it does is available from the command line and the HTTP API. Add `--json` for scripts.
 
 ```bash
-outpost import ~/.ssh/config ~/.ssh/id_ed25519
-outpost deploy --server gpu1 --agent claude-code --workdir '~/proj' --prompt 'Reproduce table 2 of the paper'
-outpost sessions
-outpost send <id> 'Run the unit tests first'
-outpost capture <id> --lines 40
-outpost attach <id>
+bunsen import ~/.ssh/config ~/.ssh/id_ed25519
+bunsen deploy --server gpu1 --agent claude-code --workdir '~/proj' --prompt 'Reproduce table 2 of the paper'
+bunsen sessions
+bunsen send <id> 'Run the unit tests first'
+bunsen capture <id> --lines 40
+bunsen attach <id>
 ```
 
 As an MCP server, so another agent can manage these research sessions and read their runs and artifacts:
 
 ```bash
-claude mcp add outpost -- outpost mcp
+claude mcp add bunsen -- bunsen mcp
 ```
 
 The API contract is in [docs/API.md](docs/API.md) and the internal design in [docs/CORE-DESIGN.md](docs/CORE-DESIGN.md) (both in Chinese).
@@ -198,8 +200,8 @@ The API contract is in [docs/API.md](docs/API.md) and the internal design in [do
 
 - The server listens on `127.0.0.1` only and uses a new random token on every start.
 - Private keys stay in the local data directory (mode 0600). No endpoint returns key material.
-- Connections use the system `ssh` with a config and `known_hosts` that belong to Outpost. Your `~/.ssh` is not modified.
-- On the server, Outpost writes only to `~/.outpost/` and the working directory you choose.
+- Connections use the system `ssh` with a config and `known_hosts` that belong to Bunsen. Your `~/.ssh` is not modified.
+- On the server, Bunsen writes only to `~/.bunsen/` and the working directory you choose.
 - HTML from the server is previewed only in a sandboxed iframe with no permissions.
 - "Skip approvals" lets the agent act without asking. Turn it on only for machines and directories you trust.
 
@@ -212,7 +214,7 @@ The API contract is in [docs/API.md](docs/API.md) and the internal design in [do
 The macOS builds are signed with a Developer ID and notarized by Apple, so a copy downloaded with a browser opens normally. To check it yourself:
 
 ```bash
-spctl -a -vv -t install ./outpost
+spctl -a -vv -t install ./bunsen
 ```
 
 The output should include `source=Notarized Developer ID`.
@@ -223,7 +225,7 @@ The output should include `source=Notarized Developer ID`.
 <summary>The server has no tmux</summary>
 <br>
 
-Install it with the system package manager, for example `sudo apt install tmux`. Without root, put a static tmux build in `~/.local/bin`; Outpost looks there.
+Install it with the system package manager, for example `sudo apt install tmux`. Without root, put a static tmux build in `~/.local/bin`; Bunsen looks there.
 
 </details>
 
@@ -231,7 +233,7 @@ Install it with the system package manager, for example `sudo apt install tmux`.
 <summary>How do agents sign in on the server?</summary>
 <br>
 
-Follow the agent's own prompts in the terminal after deploying. You can also put API keys in `~/.outpost/env.sh` on the server; every session sources it on start.
+Follow the agent's own prompts in the terminal after deploying. You can also put API keys in `~/.bunsen/env.sh` on the server; every session sources it on start.
 
 </details>
 
@@ -247,14 +249,14 @@ The OpenSSH client that ships with Windows has no connection multiplexing, so ev
 
 ```
 crates/core        Core library: ssh config, keys, probing, deploy, tmux, terminal bridge, plugins
-crates/cli         outpost: serve (HTTP + WebSocket + embedded UI), subcommands, MCP
+crates/cli         bunsen: serve (HTTP + WebSocket + embedded UI), subcommands, MCP
 ui/                React + Vite + TypeScript UI, embedded into the executable
 plugins/           Plugins shipped with every deploy, also embedded
 dev/               Demo backend, SSH test container, integration tests, screenshot script
 ```
 
 ```bash
-cargo run -p outpost-cli -- serve --dev --no-open
+cargo run -p bunsen-cli -- serve --dev --no-open
 ```
 
 ```bash
@@ -265,7 +267,7 @@ To look at the UI without a server: `bun dev/mock-server.ts`. Tests: `cargo test
 
 ## Notes
 
-Outpost is an independent open-source project and is not affiliated with Anthropic, OpenAI, Google, Alibaba Cloud, Cursor or any other vendor. Agent names and trademarks belong to their owners. The product direction is inspired by Claude Science, and the colours and layering of the interface by Claude Desktop. The brand, icons and code are original.
+Bunsen is an independent open-source project and is not affiliated with Anthropic, OpenAI, Google, Alibaba Cloud, Cursor or any other vendor. Agent names and trademarks belong to their owners. The product direction is inspired by Claude Science, and the colours and layering of the interface by Claude Desktop. The brand, icons and code are original.
 
 ## License
 

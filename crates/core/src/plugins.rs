@@ -367,7 +367,7 @@ mod tests {
 
     #[test]
     fn local_override_and_materialize() {
-        let base = std::env::temp_dir().join(format!("outpost-unit-plugins-{}", short_id()));
+        let base = std::env::temp_dir().join(format!("bunsen-unit-plugins-{}", short_id()));
         let src = base.join("mine");
         for d in ["skills/a", "keys", ".git", "scripts"] {
             std::fs::create_dir_all(src.join(d)).unwrap();

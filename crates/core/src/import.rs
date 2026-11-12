@@ -109,7 +109,7 @@ mod tests {
 
     const PRIV: &[u8] = b"-----BEGIN OPENSSH PRIVATE KEY-----\nAAAA\n-----END OPENSSH PRIVATE KEY-----\n";
     const PUB: &[u8] = b"ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAA test\n";
-    const CFG: &[u8] = b"Host outpost-test\n  HostName 127.0.0.1\n  Port 2222\n";
+    const CFG: &[u8] = b"Host bunsen-test\n  HostName 127.0.0.1\n  Port 2222\n";
 
     fn make_zip(entries: &[(&str, &[u8])]) -> Vec<u8> {
         let mut buf = Cursor::new(Vec::new());

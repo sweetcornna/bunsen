@@ -8,11 +8,11 @@ use axum::middleware::{self, Next};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post, put};
 use axum::Router;
-use outpost_core::import::Upload;
-use outpost_core::model::*;
-use outpost_core::term::{self, TermTarget};
-use outpost_core::util::{constant_time_eq, random_token};
-use outpost_core::{Code, Core, Error};
+use bunsen_core::import::Upload;
+use bunsen_core::model::*;
+use bunsen_core::term::{self, TermTarget};
+use bunsen_core::util::{constant_time_eq, random_token};
+use bunsen_core::{Code, Core, Error};
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
@@ -87,7 +87,7 @@ fn add_cors(h: &mut HeaderMap, origin: &str) {
     if let Ok(v) = HeaderValue::from_str(origin) {
         h.insert(header::ACCESS_CONTROL_ALLOW_ORIGIN, v);
     }
-    h.insert(header::ACCESS_CONTROL_ALLOW_HEADERS, HeaderValue::from_static("x-outpost-token, content-type, accept"));
+    h.insert(header::ACCESS_CONTROL_ALLOW_HEADERS, HeaderValue::from_static("x-bunsen-token, content-type, accept"));
     h.insert(header::ACCESS_CONTROL_ALLOW_METHODS, HeaderValue::from_static("GET, POST, PUT, PATCH, DELETE, OPTIONS"));
     h.insert(header::VARY, HeaderValue::from_static("Origin"));
 }
@@ -121,7 +121,7 @@ async fn guard(State(st): State<AppState>, req: Request, next: Next) -> Response
                 .and_then(|q| q.split('&').find_map(|kv| kv.strip_prefix("token=")))
                 .map(percent_decode)
         } else {
-            req.headers().get("x-outpost-token").and_then(|v| v.to_str().ok()).map(str::to_string)
+            req.headers().get("x-bunsen-token").and_then(|v| v.to_str().ok()).map(str::to_string)
         };
         if !given.as_deref().is_some_and(|g| constant_time_eq(g, &st.token)) {
             let mut r = deny(Code::Unauthorized, "缺少或错误的访问令牌");
@@ -232,7 +232,7 @@ async fn fallback(method: Method, uri: Uri) -> Response {
 
 async fn meta(State(st): State<AppState>) -> ApiResult<serde_json::Value> {
     ok(json!({
-        "version": outpost_core::VERSION,
+        "version": bunsen_core::VERSION,
         "data_dir": st.core.paths().data.to_string_lossy(),
         "platform": std::env::consts::OS,
         "dev": st.dev,

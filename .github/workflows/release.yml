@@ -47,26 +47,26 @@ jobs:
         with:
           key: ${{ matrix.target }}
       - name: Build
-        run: cargo build --release --locked -p outpost-cli --target ${{ matrix.target }}
+        run: cargo build --release --locked -p bunsen-cli --target ${{ matrix.target }}
       - name: Package
         shell: bash
         run: |
           set -euo pipefail
           t="${{ matrix.target }}"
           ext=""; [[ "$RUNNER_OS" == Windows ]] && ext=".exe"
-          bin="target/$t/release/outpost$ext"
+          bin="target/$t/release/bunsen$ext"
           if [[ "${{ matrix.run }}" == "true" ]]; then "$bin" --version; "$bin" plugins; fi
           mkdir -p stage dist
           cp "$bin" LICENSE stage/
           if [[ "$RUNNER_OS" == Windows ]]; then
-            (cd stage && 7z a -bso0 "../dist/outpost-$t.zip" "outpost$ext" LICENSE)
+            (cd stage && 7z a -bso0 "../dist/bunsen-$t.zip" "bunsen$ext" LICENSE)
           else
-            tar -czf "dist/outpost-$t.tar.gz" -C stage "outpost" LICENSE
+            tar -czf "dist/bunsen-$t.tar.gz" -C stage "bunsen" LICENSE
           fi
           ls -l dist
       - uses: actions/upload-artifact@v4
         with:
-          name: outpost-${{ matrix.target }}
+          name: bunsen-${{ matrix.target }}
           path: dist/*
           if-no-files-found: error
 
@@ -81,7 +81,7 @@ jobs:
           path: dist
           merge-multiple: true
       - name: Checksums
-        run: cd dist && sha256sum outpost-* > SHA256SUMS && cat SHA256SUMS
+        run: cd dist && sha256sum bunsen-* > SHA256SUMS && cat SHA256SUMS
       - name: Publish
         env:
           GH_TOKEN: ${{ github.token }}
@@ -90,5 +90,5 @@ jobs:
           if gh release view "$tag" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
             gh release upload "$tag" dist/* --clobber --repo "$GITHUB_REPOSITORY"
           else
-            gh release create "$tag" dist/* --repo "$GITHUB_REPOSITORY" --title "Outpost $tag" --generate-notes --verify-tag
+            gh release create "$tag" dist/* --repo "$GITHUB_REPOSITORY" --title "Bunsen $tag" --generate-notes --verify-tag
           fi

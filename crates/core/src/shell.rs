@@ -45,11 +45,11 @@ pub fn quote_path(p: &str) -> String {
 pub const PATH_PRELUDE: &str = concat!(
     "export PATH=\"$HOME/.local/bin:$HOME/bin:$HOME/.npm-global/bin:$HOME/.bun/bin:$HOME/.cargo/bin:$HOME/.opencode/bin:/usr/local/bin:$PATH\"; ",
     "for __op_d in \"$HOME\"/.nvm/versions/node/*/bin; do if [ -d \"$__op_d\" ]; then PATH=\"$__op_d:$PATH\"; fi; done; ",
-    "if [ -f \"$HOME/.outpost/env.sh\" ]; then . \"$HOME/.outpost/env.sh\"; fi"
+    "if [ -f \"$HOME/.bunsen/env.sh\" ]; then . \"$HOME/.bunsen/env.sh\"; fi"
 );
 
 /// 服务器上的 tmux 前缀。
-pub const TMUX: &str = "tmux -L outpost -f \"$HOME/.outpost/tmux.conf\"";
+pub const TMUX: &str = "tmux -L bunsen -f \"$HOME/.bunsen/tmux.conf\"";
 
 /// 把脚本包成 `{ 前导; 脚本 } </dev/null`，送进 `bash -s`。
 pub fn wrap_script(body: &str) -> String {
@@ -58,7 +58,7 @@ pub fn wrap_script(body: &str) -> String {
 
 /// 插件在服务器上的目录（`~` 开头，交给 quote_path）。
 pub fn plugin_dir(name: &str) -> String {
-    format!("~/.outpost/plugins/{name}")
+    format!("~/.bunsen/plugins/{name}")
 }
 
 /// 启动参数。
@@ -66,7 +66,7 @@ pub fn plugin_dir(name: &str) -> String {
 pub struct LaunchOpts<'a> {
     pub prompt: Option<&'a str>,
     pub yolo: bool,
-    /// 要加载的插件名（已同步到 `~/.outpost/plugins/<name>`）
+    /// 要加载的插件名（已同步到 `~/.bunsen/plugins/<name>`）
     pub plugins: &'a [String],
     pub extra_args: Option<&'a str>,
     pub resume: bool,
@@ -113,7 +113,7 @@ fn resuming(agent: &Agent, o: &LaunchOpts) -> bool {
 /// - `resume` 为真且 Agent 有 `resume` → 用它；
 /// - 有提示且有 `launch_with_prompt` → `{prompt}` 换成转义后的提示；
 /// - 否则用 `launch`（有提示时由调用方在启动后粘贴进去）；
-/// - 依次追加 `yolo_flag`、每个插件一次 `plugin_dir_flag`（`{dir}` → `~/.outpost/plugins/<name>`）、`extra_args`。
+/// - 依次追加 `yolo_flag`、每个插件一次 `plugin_dir_flag`（`{dir}` → `~/.bunsen/plugins/<name>`）、`extra_args`。
 pub fn build_launch(agent: &Agent, o: &LaunchOpts) -> Result<Launch> {
     let prompt = effective_prompt(agent, o);
     let mut prompt_in_cmd = false;
@@ -259,13 +259,13 @@ mod tests {
         let l = build_launch(&a, &o).unwrap();
         assert_eq!(
             l.cmd,
-            "claude hi --dangerously-skip-permissions --plugin-dir \"$HOME\"/.outpost/plugins/research --plugin-dir \"$HOME\"/.outpost/plugins/lab --model opus"
+            "claude hi --dangerously-skip-permissions --plugin-dir \"$HOME\"/.bunsen/plugins/research --plugin-dir \"$HOME\"/.bunsen/plugins/lab --model opus"
         );
         // 有 plugin_dir_flag 时不加插件提示。
         assert_eq!(l.prompt.as_deref(), Some("hi"));
 
         let l = build_launch(&a, &LaunchOpts { resume: true, prompt: Some("x"), yolo: true, plugins: &research, ..Default::default() }).unwrap();
-        assert_eq!(l.cmd, "claude --continue --dangerously-skip-permissions --plugin-dir \"$HOME\"/.outpost/plugins/research");
+        assert_eq!(l.cmd, "claude --continue --dangerously-skip-permissions --plugin-dir \"$HOME\"/.bunsen/plugins/research");
         assert!(!l.prompt_in_cmd);
         assert_eq!(l.prompt, None);
 
@@ -297,11 +297,11 @@ mod tests {
         c.plugin_prompt = Some("文档在 {dirs}，先读。".into());
         let two = vec!["research".to_string(), "lab".to_string()];
         let l = build_launch(&c, &LaunchOpts { prompt: Some("做实验"), plugins: &two, ..Default::default() }).unwrap();
-        assert_eq!(l.prompt.as_deref(), Some("文档在 ~/.outpost/plugins/research,~/.outpost/plugins/lab，先读。\n\n做实验"));
-        assert!(l.cmd.starts_with("codex '文档在 ~/.outpost/plugins/research,"));
+        assert_eq!(l.prompt.as_deref(), Some("文档在 ~/.bunsen/plugins/research,~/.bunsen/plugins/lab，先读。\n\n做实验"));
+        assert!(l.cmd.starts_with("codex '文档在 ~/.bunsen/plugins/research,"));
         // 没有用户提示：插件提示单独作为初始提示。
         let l = build_launch(&c, &LaunchOpts { plugins: &two, ..Default::default() }).unwrap();
-        assert_eq!(l.prompt.as_deref(), Some("文档在 ~/.outpost/plugins/research,~/.outpost/plugins/lab，先读。"));
+        assert_eq!(l.prompt.as_deref(), Some("文档在 ~/.bunsen/plugins/research,~/.bunsen/plugins/lab，先读。"));
         // 不带插件：没有插件提示。
         let l = build_launch(&c, &LaunchOpts::default()).unwrap();
         assert_eq!((l.cmd.as_str(), l.prompt), ("codex", None));
@@ -323,7 +323,7 @@ mod tests {
         assert!(cmd.starts_with("bash -lc '"));
         // 本机测试不读用户的登录配置。
         let cmd = cmd.replacen("bash -lc ", "bash --noprofile --norc -c ", 1);
-        let out = Command::new("sh").arg("-c").arg(&cmd).env("HOME", "/nonexistent-outpost-test").output().unwrap();
+        let out = Command::new("sh").arg("-c").arg(&cmd).env("HOME", "/nonexistent-bunsen-test").output().unwrap();
         assert_eq!(String::from_utf8_lossy(&out.stdout), "[it's 中文 $HOME `x`\n2]");
     }
 

@@ -206,7 +206,7 @@ export type ServerInput = {
 
 // ---------- 令牌 ----------
 
-const TOKEN_KEY = "outpost.token";
+const TOKEN_KEY = "bunsen.token";
 let memToken: string | null = null;
 
 /** 启动地址形如 /#token=xxx：读出来存好，再把片段抹掉。 */
@@ -264,7 +264,7 @@ async function errorFrom(res: Response): Promise<ApiError> {
 }
 
 async function send(method: string, path: string, body?: unknown, accept?: string): Promise<Response> {
-  const headers: Record<string, string> = { "x-outpost-token": token() };
+  const headers: Record<string, string> = { "x-bunsen-token": token() };
   if (accept) headers["accept"] = accept;
   let payload: BodyInit | undefined;
   if (body instanceof FormData) payload = body;
@@ -275,7 +275,7 @@ async function send(method: string, path: string, body?: unknown, accept?: strin
   try {
     return await fetch(path, { method, headers, body: payload });
   } catch {
-    throw new ApiError("offline", "连不上 Outpost 服务", "确认 outpost serve 还在运行，然后刷新页面。", 0);
+    throw new ApiError("offline", "连不上 Bunsen 服务", "确认 bunsen serve 还在运行，然后刷新页面。", 0);
   }
 }
 

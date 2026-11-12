@@ -1,8 +1,8 @@
-//! 集成测试：起真实的 `outpost serve`，通过 HTTP / WebSocket 接口走完整条流程。
+//! 集成测试：起真实的 `bunsen serve`，通过 HTTP / WebSocket 接口走完整条流程。
 //! 目标是本机的一次性 SSH 容器（dev/test-server/run.sh up，dev@127.0.0.1:2222）。
 //!
 //! 运行：`dev/itest.sh`
-//! 或：`OUTPOST_ITEST=1 cargo test -p outpost-cli --test itest -- --ignored --nocapture`
+//! 或：`BUNSEN_ITEST=1 cargo test -p bunsen-cli --test itest -- --ignored --nocapture`
 
 use futures_util::{SinkExt, StreamExt};
 use serde_json::{json, Value};
@@ -22,7 +22,7 @@ fn fixtures() -> PathBuf {
 }
 
 fn rand_tag() -> String {
-    outpost_core::util::short_id()
+    bunsen_core::util::short_id()
 }
 
 fn step(name: &str) {
@@ -41,15 +41,15 @@ impl Serve {
             let l = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
             l.local_addr().unwrap().port()
         };
-        let mut child = Command::new(env!("CARGO_BIN_EXE_outpost"))
+        let mut child = Command::new(env!("CARGO_BIN_EXE_bunsen"))
             .args(["serve", "--port", &port.to_string(), "--no-open"])
-            .env("OUTPOST_DATA_DIR", data)
-            .env("OUTPOST_CM_DIR", cm)
+            .env("BUNSEN_DATA_DIR", data)
+            .env("BUNSEN_CM_DIR", cm)
             .envs(envs.iter().copied())
             .stdout(Stdio::piped())
             .stderr(Stdio::inherit())
             .spawn()
-            .expect("启动 outpost serve 失败");
+            .expect("启动 bunsen serve 失败");
         let stdout = child.stdout.take().unwrap();
         let (tx, rx) = std::sync::mpsc::channel();
         std::thread::spawn(move || {
@@ -70,7 +70,7 @@ impl Serve {
 
     fn client(&self) -> reqwest::Client {
         let mut h = reqwest::header::HeaderMap::new();
-        h.insert("x-outpost-token", self.token.parse().unwrap());
+        h.insert("x-bunsen-token", self.token.parse().unwrap());
         reqwest::Client::builder().default_headers(h).timeout(Duration::from_secs(120)).build().unwrap()
     }
 
@@ -109,7 +109,7 @@ fn raw_status(port: u16, host: &str, path: &str, token: Option<&str>, origin: Op
     let mut s = TcpStream::connect(("127.0.0.1", port)).unwrap();
     let mut req = format!("GET {path} HTTP/1.1\r\nHost: {host}\r\nConnection: close\r\n");
     if let Some(t) = token {
-        req.push_str(&format!("x-outpost-token: {t}\r\n"));
+        req.push_str(&format!("x-bunsen-token: {t}\r\n"));
     }
     if let Some(o) = origin {
         req.push_str(&format!("Origin: {o}\r\n"));
@@ -228,7 +228,7 @@ fn remote(data: &Path, script: &str) -> (i32, String) {
     let mut ch = Command::new("ssh")
         .arg("-F")
         .arg(data.join("ssh/config"))
-        .args(["-o", "BatchMode=yes", "outpost-test", "bash", "-s"])
+        .args(["-o", "BatchMode=yes", "bunsen-test", "bash", "-s"])
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -240,7 +240,7 @@ fn remote(data: &Path, script: &str) -> (i32, String) {
     (out.status.code().unwrap_or(-1), text)
 }
 
-/// 起一个 `outpost mcp`，逐条发请求，按 id 收回复。
+/// 起一个 `bunsen mcp`，逐条发请求，按 id 收回复。
 struct Mcp {
     child: Child,
     stdin: std::process::ChildStdin,
@@ -250,10 +250,10 @@ struct Mcp {
 
 impl Mcp {
     fn start(data: &Path, cm: &Path) -> Mcp {
-        let mut child = Command::new(env!("CARGO_BIN_EXE_outpost"))
+        let mut child = Command::new(env!("CARGO_BIN_EXE_bunsen"))
             .arg("mcp")
-            .env("OUTPOST_DATA_DIR", data)
-            .env("OUTPOST_CM_DIR", cm)
+            .env("BUNSEN_DATA_DIR", data)
+            .env("BUNSEN_CM_DIR", cm)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::inherit())
@@ -308,7 +308,7 @@ fn ssh_cleanup(data: &Path, script: &str) {
     let _ = Command::new("ssh")
         .arg("-F")
         .arg(data.join("ssh/config"))
-        .args(["-o", "BatchMode=yes", "outpost-test", "bash", "-s"])
+        .args(["-o", "BatchMode=yes", "bunsen-test", "bash", "-s"])
         .stdin(Stdio::piped())
         .stdout(Stdio::null())
         .stderr(Stdio::null())
@@ -320,7 +320,7 @@ fn ssh_cleanup(data: &Path, script: &str) {
     let _ = Command::new("ssh")
         .arg("-F")
         .arg(data.join("ssh/config"))
-        .args(["-O", "exit", "outpost-test"])
+        .args(["-O", "exit", "bunsen-test"])
         .stdout(Stdio::null())
         .stderr(Stdio::null())
         .status();
@@ -329,8 +329,8 @@ fn ssh_cleanup(data: &Path, script: &str) {
 #[tokio::test(flavor = "multi_thread")]
 #[ignore = "需要本机测试容器：dev/test-server/run.sh up；用 dev/itest.sh 运行"]
 async fn full_flow() {
-    if std::env::var("OUTPOST_ITEST").ok().as_deref() != Some("1") {
-        println!("未设置 OUTPOST_ITEST=1，跳过集成测试");
+    if std::env::var("BUNSEN_ITEST").ok().as_deref() != Some("1") {
+        println!("未设置 BUNSEN_ITEST=1，跳过集成测试");
         return;
     }
     tokio::time::timeout(Duration::from_secs(600), flow()).await.expect("集成测试整体超时");
@@ -338,7 +338,7 @@ async fn full_flow() {
 
 async fn flow() {
     let tag = rand_tag();
-    let base = std::env::temp_dir().join(format!("outpost-itest-{tag}"));
+    let base = std::env::temp_dir().join(format!("bunsen-itest-{tag}"));
     let data1 = base.join("data1");
     let data2 = base.join("data2");
     // ControlPath 是 unix 套接字，路径要短。
@@ -409,7 +409,7 @@ async fn flow() {
     let imp = import(&c, &a).await;
     assert_eq!(imp["servers_added"].as_array().unwrap().len(), 1, "{imp}");
     let sv = &imp["servers_added"][0];
-    assert_eq!(sv["alias"], "outpost-test");
+    assert_eq!(sv["alias"], "bunsen-test");
     assert_eq!(sv["port"], 2222);
     assert_eq!(sv["key"], "id_test");
     assert_eq!(sv["status"], "online", "{imp}");
@@ -421,11 +421,11 @@ async fn flow() {
     // 清掉以前失败的运行留在服务器上的东西（只动集成测试自己建的会话与目录）。
     remote(
         &data1,
-        "for f in ~/.outpost/sessions/*.json; do [ -f \"$f\" ] || continue\n\
+        "for f in ~/.bunsen/sessions/*.json; do [ -f \"$f\" ] || continue\n\
            if grep -q -e '\"workdir\":\"~/itest-' -e '\"agent_id\":\"fake-' \"$f\"; then\n\
-             i=$(basename \"$f\" .json); tmux -L outpost kill-session -t \"=op-$i\" 2>/dev/null; tmux -L outpost kill-session -t \"=op-$i-sh\" 2>/dev/null; rm -f \"$f\"\n\
+             i=$(basename \"$f\" .json); tmux -L bunsen kill-session -t \"=op-$i\" 2>/dev/null; tmux -L bunsen kill-session -t \"=op-$i-sh\" 2>/dev/null; rm -f \"$f\"\n\
            fi\n\
-         done\nrm -rf ~/itest-*; tmux -L outpost kill-session -t =op-install-inst-it 2>/dev/null; true",
+         done\nrm -rf ~/itest-*; tmux -L bunsen kill-session -t =op-install-inst-it 2>/dev/null; true",
     );
     let imp_text = imp.to_string();
     assert!(!imp_text.contains("PRIVATE KEY"), "响应里不能出现私钥内容");
@@ -441,14 +441,14 @@ async fn flow() {
 
     let (code, keys) = get(&c, &a, "/api/keys").await;
     assert_eq!(code, 200);
-    assert_eq!(keys[0]["used_by"][0], "outpost-test");
+    assert_eq!(keys[0]["used_by"][0], "bunsen-test");
 
     // ---- 测试连接 / 探测 ----
     let (code, t) = post(&c, &a, &format!("/api/servers/{server_id}/test"), json!({})).await;
     assert_eq!(code, 200);
     assert_eq!(t["ok"], true, "{t}");
     assert!(t["latency_ms"].as_u64().is_some());
-    remote(&data1, "rm -f ~/.outpost/HOST.md ~/.local/bin/nvidia-smi");
+    remote(&data1, "rm -f ~/.bunsen/HOST.md ~/.local/bin/nvidia-smi");
     let (code, p) = post(&c, &a, &format!("/api/servers/{server_id}/probe"), json!({})).await;
     assert_eq!(code, 200, "{p}");
     let probe = &p["probe"];
@@ -578,7 +578,7 @@ async fn flow() {
 
     let (rc, out) = remote(
         &data1,
-        "cd ~/.outpost/plugins || exit 1\n\
+        "cd ~/.bunsen/plugins || exit 1\n\
          test -f research/skills/orchestrator/SKILL.md && echo HAS_SKILL\n\
          test -f research/.claude-plugin/plugin.json && echo HAS_MANIFEST\n\
          for f in research/scripts/*.sh research/hooks/*.sh research/templates/research/tools/*.py; do test -x \"$f\" || echo \"NOT_EXEC $f\"; done\n\
@@ -597,7 +597,7 @@ async fn flow() {
     assert!(out.contains("labkit research") && !out.contains(".tmp") && !out.contains(".old"), "临时目录应已替换掉：{out}");
     step("插件下发：research/skills/orchestrator/SKILL.md 在，keys/secrets/.git/id_*/*.pem/.env* 等都没有，scripts/hooks/tools 可执行");
 
-    let (code, plug) = get(&c, &a, &format!("/api/sessions/{id}/files?path=~/.outpost/plugins/labkit")).await;
+    let (code, plug) = get(&c, &a, &format!("/api/sessions/{id}/files?path=~/.bunsen/plugins/labkit")).await;
     assert_eq!(code, 200, "{plug}");
     let names: Vec<&str> = plug["entries"].as_array().unwrap().iter().map(|e| e["name"].as_str().unwrap()).collect();
     assert_eq!(names, ["scripts", "skills", "notes.md"], "{plug}");
@@ -703,7 +703,7 @@ async fn flow() {
     assert_eq!(code, 200, "{f}");
     assert_eq!(f["path"], format!("/home/dev/{remote_root}/work dir"));
     assert_eq!(f["parent"], format!("/home/dev/{remote_root}"));
-    let (code, f) = get(&c, &a, &format!("/api/sessions/{id}/file?path=~/.outpost/sessions/{id}.json")).await;
+    let (code, f) = get(&c, &a, &format!("/api/sessions/{id}/file?path=~/.bunsen/sessions/{id}.json")).await;
     assert_eq!(code, 200, "{f}");
     assert_eq!(f["binary"], false);
     let meta: Value = serde_json::from_str(f["text"].as_str().unwrap().trim()).unwrap();
@@ -726,7 +726,7 @@ async fn flow() {
     let lines = deploy_ndjson(
         &c,
         &a,
-        json!({ "server_id": "outpost-test", "agent_id": "shell", "workdir": format!("~/{remote_root}/repo"), "title": "仓库" }),
+        json!({ "server_id": "bunsen-test", "agent_id": "shell", "workdir": format!("~/{remote_root}/repo"), "title": "仓库" }),
     )
     .await;
     assert_eq!(lines.last().unwrap()["type"], "done", "{lines:?}");
@@ -803,7 +803,7 @@ async fn flow() {
     assert_eq!(pp["plugins"], json!(["research"]));
     assert_eq!(pp["title"], "开始");
     let pp_id = pp["id"].as_str().unwrap().to_string();
-    let cap = wait_capture(&c, &a, &pp_id, "参数: 插件在 ~/.outpost/plugins/research，先读。").await;
+    let cap = wait_capture(&c, &a, &pp_id, "参数: 插件在 ~/.bunsen/plugins/research，先读。").await;
     assert!(cap.contains("开始") && !cap.contains("--plugin-dir") && !cap.contains("labkit"), "{cap}");
     let (code, _) = send_json(&c, reqwest::Method::DELETE, &a, &format!("/api/sessions/{pp_id}?force=1"), json!({})).await;
     assert_eq!(code, 200);
@@ -817,7 +817,7 @@ async fn flow() {
         &data1,
         &format!(
             "set -e\nmkdir -p {proj} && cd {proj}\n\
-             cp -r ~/.outpost/plugins/research/templates/research research\n\
+             cp -r ~/.bunsen/plugins/research/templates/research research\n\
              mkdir -p figures results paper .cache node_modules/pkg out/a/b/c/d/e/f/g/h research/.loop\n\
              printf '# 预登记：H1\\n' > research/prereg/h1.md\n\
              printf 'png' > figures/loss.png; printf 'a,b\\n1,2\\n' > results/table.csv; printf '# 报告\\n' > results/report.md\n\
@@ -908,7 +908,7 @@ async fn flow() {
     assert_eq!(h["content-disposition"], "attachment");
     assert_eq!(r.bytes().await.unwrap().as_ref(), b"png");
     let rk_local = std::fs::read(app_root().join("plugins/research/templates/research/tools/rk.py")).unwrap();
-    let r = c.get(a.url(&format!("/api/sessions/{rid}/raw?path=~/.outpost/plugins/research/templates/research/tools/rk.py"))).send().await.unwrap();
+    let r = c.get(a.url(&format!("/api/sessions/{rid}/raw?path=~/.bunsen/plugins/research/templates/research/tools/rk.py"))).send().await.unwrap();
     assert_eq!(r.bytes().await.unwrap().as_ref(), rk_local.as_slice(), "下发的 rk.py 与内嵌的一字不差");
     remote(&data1, &format!("head -c 33600000 /dev/zero > {proj}/big.bin; rm -f /tmp/op-pwned"));
     let (code, e) = get(&c, &a, &format!("/api/sessions/{rid}/raw?path=big.bin")).await;
@@ -924,7 +924,7 @@ async fn flow() {
     // ---- MCP（v1.1 / v1.2 的工具）----
     let mut m = Mcp::start(&data1, &cm);
     let init = m.call("initialize", json!({ "protocolVersion": "2025-06-18", "capabilities": {}, "clientInfo": { "name": "itest", "version": "0" } }));
-    assert_eq!(init["result"]["serverInfo"]["name"], "outpost", "{init}");
+    assert_eq!(init["result"]["serverInfo"]["name"], "bunsen", "{init}");
     m.notify("notifications/initialized");
     let tl = m.call("tools/list", json!({}));
     let tools: Vec<&str> = tl["result"]["tools"].as_array().unwrap().iter().map(|t| t["name"].as_str().unwrap()).collect();
@@ -933,7 +933,7 @@ async fn flow() {
     }
     let (err, v) = m.tool("plugin_list", json!({}));
     assert!(!err && v[0]["name"] == "research", "{v}");
-    let (err, v) = m.tool("host_notes_get", json!({ "server_id": "outpost-test" }));
+    let (err, v) = m.tool("host_notes_get", json!({ "server_id": "bunsen-test" }));
     assert!(!err && v["text"] == mine, "{v}");
     let (err, v) = m.tool("session_artifacts", json!({ "session_id": rid, "limit": 1 }));
     assert!(!err && v["items"][0]["path"] == "figures/loss.png" && v["truncated"] == true, "{v}");
@@ -975,7 +975,7 @@ async fn flow() {
     // ---- 模拟退出软件再打开：全新的空数据目录 ----
     a.stop();
     drop(a);
-    let b = Serve::start(&data2, &cm, &[("OUTPOST_SYNC_METHOD", "tar"), ("OUTPOST_REMOTE_NO_PYTHON", "1")]);
+    let b = Serve::start(&data2, &cm, &[("BUNSEN_SYNC_METHOD", "tar"), ("BUNSEN_REMOTE_NO_PYTHON", "1")]);
     let c = b.client();
     let imp = import(&c, &b).await;
     assert_eq!(imp["tests"][0]["ok"], true, "{imp}");
@@ -993,7 +993,7 @@ async fn flow() {
     assert!(cap.contains("fake-agent 1.0"), "{cap}");
     step("停掉服务、换全新数据目录重新导入：refresh=1 发现会话（origin=discovered），能再次 capture");
 
-    // 没有 python3 时的退路（这个服务进程设置了 OUTPOST_REMOTE_NO_PYTHON=1）：BusyBox 的 find + stat。
+    // 没有 python3 时的退路（这个服务进程设置了 BUNSEN_REMOTE_NO_PYTHON=1）：BusyBox 的 find + stat。
     let (code, art) = get(&c, &b, &format!("/api/sessions/{rid}/artifacts")).await;
     assert_eq!(code, 200, "{art}");
     expect_art(&art);
@@ -1004,7 +1004,7 @@ async fn flow() {
     assert_eq!(code, 200);
     step("没有 python3 时（BusyBox find + stat）：artifacts 结果相同，files 也能列目录");
 
-    // tar 回退（这个服务进程设置了 OUTPOST_SYNC_METHOD=tar）；research_plugin_path 覆盖内嵌的 research
+    // tar 回退（这个服务进程设置了 BUNSEN_SYNC_METHOD=tar）；research_plugin_path 覆盖内嵌的 research
     let (_, st) = get(&c, &b, "/api/settings").await;
     let mut st2 = st.clone();
     st2["research_plugin_path"] = json!(plugin_src.to_string_lossy());
@@ -1013,13 +1013,13 @@ async fn flow() {
     std::fs::write(plugin_src.join("marker2.txt"), "第二次同步\n").unwrap();
     let (_, pl) = get(&c, &b, "/api/plugins").await;
     assert_eq!((pl[0]["name"].as_str(), pl[0]["source"].as_str()), (Some("research"), Some("local")), "{pl}");
-    let lines = deploy_ndjson(&c, &b, json!({ "server_id": "outpost-test", "agent_id": "shell", "workdir": format!("~/{remote_root}/tar"), "plugin": "research" })).await;
+    let lines = deploy_ndjson(&c, &b, json!({ "server_id": "bunsen-test", "agent_id": "shell", "workdir": format!("~/{remote_root}/tar"), "plugin": "research" })).await;
     assert_eq!(lines.last().unwrap()["type"], "done", "{lines:?}");
     let plug_step = lines.iter().find(|l| l["step"] == "plugin" && l["status"] == "ok").expect("plugin 步骤没有 ok");
     let d = plug_step["detail"].as_str().unwrap();
     assert!(d.starts_with("research · 1 个技能") && d.contains("tar"), "{plug_step}");
     let sid3 = lines.last().unwrap()["session"]["id"].as_str().unwrap().to_string();
-    let (code, plug) = get(&c, &b, &format!("/api/sessions/{sid3}/files?path=~/.outpost/plugins/research")).await;
+    let (code, plug) = get(&c, &b, &format!("/api/sessions/{sid3}/files?path=~/.bunsen/plugins/research")).await;
     assert_eq!(code, 200);
     let names: Vec<&str> = plug["entries"].as_array().unwrap().iter().map(|e| e["name"].as_str().unwrap()).collect();
     assert_eq!(names, ["skills", "marker.txt", "marker2.txt"], "{plug}");
@@ -1043,8 +1043,8 @@ async fn flow() {
     ssh_cleanup(
         &data2,
         &format!(
-            "rm -rf ~/{remote_root} ~/.outpost/sessions/{id}.json ~/.outpost/sessions/{sid2}.json ~/.local/bin/nvidia-smi\n\
-             tmux -L outpost kill-session -t =op-install-inst-it 2>/dev/null; true\n"
+            "rm -rf ~/{remote_root} ~/.bunsen/sessions/{id}.json ~/.bunsen/sessions/{sid2}.json ~/.local/bin/nvidia-smi\n\
+             tmux -L bunsen kill-session -t =op-install-inst-it 2>/dev/null; true\n"
         ),
     );
     let _ = std::fs::remove_dir_all(&base);

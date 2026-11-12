@@ -38,8 +38,8 @@ export function Welcome() {
   const setDraft = useApp((s) => s.setDraft);
   const setSession = useApp((s) => s.setSession);
 
-  const [serverId, setServerId] = useState<string | null>(() => loadLocal<string | null>("outpost.last.server", null));
-  const [agentId, setAgentId] = useState<string | null>(() => loadLocal<string | null>("outpost.last.agent", null));
+  const [serverId, setServerId] = useState<string | null>(() => loadLocal<string | null>("bunsen.last.server", null));
+  const [agentId, setAgentId] = useState<string | null>(() => loadLocal<string | null>("bunsen.last.agent", null));
   const [workdir, setWorkdir] = useState("");
   const [prompt, setPrompt] = useState("");
   const [yolo, setYolo] = useState(false);
@@ -72,7 +72,7 @@ export function Welcome() {
 
   useEffect(() => {
     if (!server) return;
-    setWorkdir(loadLocal<string>(`outpost.workdir.${server.id}`, server.default_workdir || "~"));
+    setWorkdir(loadLocal<string>(`bunsen.workdir.${server.id}`, server.default_workdir || "~"));
   }, [server?.id]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // 插件默认随部署整套下发；支持插件目录的 Agent 直接加载，其余的用提示指过去。
@@ -100,9 +100,9 @@ export function Welcome() {
         },
         (st) => setSteps((prev) => (prev ?? []).map((p) => (p.step === st.step ? { ...p, ...st } : p))),
       );
-      saveLocal("outpost.last.server", server.id);
-      saveLocal("outpost.last.agent", agent.id);
-      saveLocal(`outpost.workdir.${server.id}`, workdir.trim());
+      saveLocal("bunsen.last.server", server.id);
+      saveLocal("bunsen.last.agent", agent.id);
+      saveLocal(`bunsen.workdir.${server.id}`, workdir.trim());
       setSession(session);
       setPrompt("");
       setSteps(null);

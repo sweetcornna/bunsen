@@ -206,7 +206,7 @@ function ServerCard({ server, onEdit }: { server: Server; onEdit: () => void }) 
   );
 }
 
-/** 每台服务器一份笔记，存在服务器的 ~/.outpost/HOST.md，Agent 也能读写。 */
+/** 每台服务器一份笔记，存在服务器的 ~/.bunsen/HOST.md，Agent 也能读写。 */
 function NotesDialog({ server, onClose }: { server: Server; onClose: () => void }) {
   const fail = useApp((s) => s.fail);
   const [text, setText] = useState<string | null>(null);
@@ -249,7 +249,7 @@ function NotesDialog({ server, onClose }: { server: Server; onClose: () => void 
       onOpenChange={(v) => !v && onClose()}
       size="lg"
       title={`主机笔记 · ${server.alias}`}
-      description={<code>~/.outpost/HOST.md</code>}
+      description={<code>~/.bunsen/HOST.md</code>}
       footer={
         <>
           <Segmented
@@ -405,7 +405,7 @@ function KeyList({ keys }: { keys: KeyInfo[] }) {
         open={del !== null}
         onOpenChange={(v) => !v && setDel(null)}
         title={`删除密钥 ${del?.name ?? ""}？`}
-        body="从 Outpost 中删除这把私钥，不可恢复。~/.ssh 里的原件不受影响。"
+        body="从 Bunsen 中删除这把私钥，不可恢复。~/.ssh 里的原件不受影响。"
         confirmLabel="删除"
         danger
         onConfirm={() => del && void api.deleteKey(del.name).then(loadKeys).catch(fail)}
