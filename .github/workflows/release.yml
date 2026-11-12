@@ -1,0 +1,93 @@
+name: Release
+
+# 推送 v* 标签时构建各平台的可执行文件并发布到 GitHub Releases。
+# macOS 包在这里只有临时签名；用 Developer ID 签名和公证见 dev/sign-macos.sh。
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: ${{ matrix.target }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { target: aarch64-apple-darwin, os: macos-14, run: true }
+          - { target: x86_64-apple-darwin, os: macos-14, run: false }
+          - { target: x86_64-unknown-linux-musl, os: ubuntu-24.04, run: true }
+          - { target: aarch64-unknown-linux-musl, os: ubuntu-24.04-arm, run: true }
+          - { target: x86_64-pc-windows-msvc, os: windows-latest, run: true }
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          package_json_file: ui/package.json
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: ui/pnpm-lock.yaml
+      - name: Build UI
+        run: |
+          pnpm -C ui install --frozen-lockfile
+          pnpm -C ui build
+      - name: Rust target
+        shell: bash
+        run: rustup target add ${{ matrix.target }}
+      - name: musl tools
+        if: contains(matrix.target, 'musl')
+        run: sudo apt-get update && sudo apt-get install -y musl-tools
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.target }}
+      - name: Build
+        run: cargo build --release --locked -p outpost-cli --target ${{ matrix.target }}
+      - name: Package
+        shell: bash
+        run: |
+          set -euo pipefail
+          t="${{ matrix.target }}"
+          ext=""; [[ "$RUNNER_OS" == Windows ]] && ext=".exe"
+          bin="target/$t/release/outpost$ext"
+          if [[ "${{ matrix.run }}" == "true" ]]; then "$bin" --version; "$bin" plugins; fi
+          mkdir -p stage dist
+          cp "$bin" LICENSE stage/
+          if [[ "$RUNNER_OS" == Windows ]]; then
+            (cd stage && 7z a -bso0 "../dist/outpost-$t.zip" "outpost$ext" LICENSE)
+          else
+            tar -czf "dist/outpost-$t.tar.gz" -C stage "outpost" LICENSE
+          fi
+          ls -l dist
+      - uses: actions/upload-artifact@v4
+        with:
+          name: outpost-${{ matrix.target }}
+          path: dist/*
+          if-no-files-found: error
+
+  publish:
+    needs: build
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+      - name: Checksums
+        run: cd dist && sha256sum outpost-* > SHA256SUMS && cat SHA256SUMS
+      - name: Publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          tag="$GITHUB_REF_NAME"
+          if gh release view "$tag" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release upload "$tag" dist/* --clobber --repo "$GITHUB_REPOSITORY"
+          else
+            gh release create "$tag" dist/* --repo "$GITHUB_REPOSITORY" --title "Outpost $tag" --generate-notes --verify-tag
+          fi

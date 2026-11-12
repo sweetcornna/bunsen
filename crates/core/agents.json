@@ -1,0 +1,169 @@
+[
+  {
+    "id": "claude-code",
+    "name": "Claude Code",
+    "vendor": "Anthropic",
+    "description": "Anthropic 的命令行编码代理，能读写代码、跑命令、按计划完成多步任务。",
+    "detect": "claude",
+    "launch": "claude",
+    "launch_with_prompt": "claude {prompt}",
+    "resume": "claude --continue",
+    "yolo_flag": "--dangerously-skip-permissions",
+    "plugin_dir_flag": "--plugin-dir {dir}",
+    "plugin_prompt": null,
+    "install": [
+      {
+        "label": "官方脚本",
+        "cmd": "curl -fsSL https://claude.ai/install.sh | bash"
+      },
+      {
+        "label": "npm",
+        "cmd": "npm install -g @anthropic-ai/claude-code"
+      }
+    ],
+    "auth_hint": "在服务器上接入会话后首次运行 claude，按提示用浏览器登录 Claude 账号；也可以在 ~/.outpost/env.sh 里设置 ANTHROPIC_API_KEY。",
+    "docs_url": "https://docs.anthropic.com/en/docs/claude-code/overview"
+  },
+  {
+    "id": "codex",
+    "name": "Codex",
+    "vendor": "OpenAI",
+    "description": "OpenAI 的命令行编码代理，在终端里读改代码并执行命令。",
+    "detect": "codex",
+    "launch": "codex",
+    "launch_with_prompt": "codex {prompt}",
+    "resume": "codex resume --last",
+    "yolo_flag": "--dangerously-bypass-approvals-and-sandbox",
+    "plugin_dir_flag": null,
+    "plugin_prompt": "科研流程文档在 {dirs}。开始前先读其中的 skills/orchestrator/SKILL.md 与 skills/protocol/SKILL.md，并照做。",
+    "install": [
+      {
+        "label": "npm",
+        "cmd": "npm install -g @openai/codex"
+      }
+    ],
+    "auth_hint": "首次运行 codex 按提示登录 ChatGPT 账号（服务器上可用 codex login --device-auth）；或在 ~/.outpost/env.sh 里设置 OPENAI_API_KEY。",
+    "docs_url": "https://developers.openai.com/codex/cli"
+  },
+  {
+    "id": "gemini",
+    "name": "Gemini CLI",
+    "vendor": "Google",
+    "description": "Google 的开源命令行代理，接入 Gemini 模型。",
+    "detect": "gemini",
+    "launch": "gemini",
+    "launch_with_prompt": "gemini -i {prompt}",
+    "resume": "gemini --resume latest",
+    "yolo_flag": "--yolo",
+    "plugin_dir_flag": null,
+    "plugin_prompt": "科研流程文档在 {dirs}。开始前先读其中的 skills/orchestrator/SKILL.md 与 skills/protocol/SKILL.md，并照做。",
+    "install": [
+      {
+        "label": "npm",
+        "cmd": "npm install -g @google/gemini-cli"
+      }
+    ],
+    "auth_hint": "首次运行 gemini 选择用 Google 账号登录；或在 ~/.outpost/env.sh 里设置 GEMINI_API_KEY。",
+    "docs_url": "https://github.com/google-gemini/gemini-cli"
+  },
+  {
+    "id": "qwen",
+    "name": "Qwen Code",
+    "vendor": "阿里云",
+    "description": "通义千问的命令行编码代理，用法与 Gemini CLI 相近。",
+    "detect": "qwen",
+    "launch": "qwen",
+    "launch_with_prompt": "qwen -i {prompt}",
+    "resume": null,
+    "yolo_flag": "--yolo",
+    "plugin_dir_flag": null,
+    "plugin_prompt": "科研流程文档在 {dirs}。开始前先读其中的 skills/orchestrator/SKILL.md 与 skills/protocol/SKILL.md，并照做。",
+    "install": [
+      {
+        "label": "npm",
+        "cmd": "npm install -g @qwen-code/qwen-code"
+      }
+    ],
+    "auth_hint": "首次运行 qwen 按提示登录，或在 ~/.outpost/env.sh 里设置 OPENAI_API_KEY、OPENAI_BASE_URL、OPENAI_MODEL。",
+    "docs_url": "https://github.com/QwenLM/qwen-code"
+  },
+  {
+    "id": "opencode",
+    "name": "OpenCode",
+    "vendor": "SST",
+    "description": "开源的终端编码代理，可接多家模型服务。",
+    "detect": "opencode",
+    "launch": "opencode",
+    "launch_with_prompt": "opencode --prompt {prompt}",
+    "resume": "opencode --continue",
+    "yolo_flag": null,
+    "plugin_dir_flag": null,
+    "plugin_prompt": "科研流程文档在 {dirs}。开始前先读其中的 skills/orchestrator/SKILL.md 与 skills/protocol/SKILL.md，并照做。",
+    "install": [
+      {
+        "label": "官方脚本",
+        "cmd": "curl -fsSL https://opencode.ai/install | bash"
+      }
+    ],
+    "auth_hint": "在服务器上运行 opencode auth login 选择模型服务并填入凭据。",
+    "docs_url": "https://opencode.ai/docs"
+  },
+  {
+    "id": "cursor-agent",
+    "name": "Cursor CLI",
+    "vendor": "Cursor",
+    "description": "Cursor 的命令行代理，在终端里使用 Cursor 的编码能力。",
+    "detect": "cursor-agent",
+    "launch": "cursor-agent",
+    "launch_with_prompt": "cursor-agent {prompt}",
+    "resume": "cursor-agent resume",
+    "yolo_flag": null,
+    "plugin_dir_flag": null,
+    "plugin_prompt": "科研流程文档在 {dirs}。开始前先读其中的 skills/orchestrator/SKILL.md 与 skills/protocol/SKILL.md，并照做。",
+    "install": [
+      {
+        "label": "官方脚本",
+        "cmd": "curl https://cursor.com/install -fsS | bash"
+      }
+    ],
+    "auth_hint": "在服务器上运行 cursor-agent login 按提示登录；或在 ~/.outpost/env.sh 里设置 CURSOR_API_KEY。",
+    "docs_url": "https://docs.cursor.com/en/cli/overview"
+  },
+  {
+    "id": "aider",
+    "name": "Aider",
+    "vendor": "Aider",
+    "description": "开源的结对编程代理，直接在 git 仓库里改代码并提交。",
+    "detect": "aider",
+    "launch": "aider",
+    "launch_with_prompt": null,
+    "resume": null,
+    "yolo_flag": "--yes-always",
+    "plugin_dir_flag": null,
+    "plugin_prompt": "科研流程文档在 {dirs}。开始前先读其中的 skills/orchestrator/SKILL.md 与 skills/protocol/SKILL.md，并照做。",
+    "install": [
+      {
+        "label": "官方脚本",
+        "cmd": "curl -LsSf https://aider.chat/install.sh | sh"
+      }
+    ],
+    "auth_hint": "在 ~/.outpost/env.sh 里设置所用模型服务的密钥，例如 ANTHROPIC_API_KEY 或 OPENAI_API_KEY。",
+    "docs_url": "https://aider.chat/docs/"
+  },
+  {
+    "id": "shell",
+    "name": "纯终端",
+    "vendor": "Outpost",
+    "description": "不启动代理，只要一个关掉软件也不会断的持久终端。",
+    "detect": "bash",
+    "launch": "bash -l",
+    "launch_with_prompt": null,
+    "resume": null,
+    "yolo_flag": null,
+    "plugin_dir_flag": null,
+    "plugin_prompt": null,
+    "install": [],
+    "auth_hint": "无需登录。",
+    "docs_url": ""
+  }
+]

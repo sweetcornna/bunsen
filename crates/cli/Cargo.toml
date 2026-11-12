@@ -1,0 +1,22 @@
+[package]
+name = "outpost-cli"
+version.workspace = true
+edition.workspace = true
+
+[[bin]]
+name = "outpost"
+path = "src/main.rs"
+
+[dependencies]
+outpost-core = { path = "../core" }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "process", "io-util", "io-std", "time", "sync", "signal", "net"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+clap = { version = "4", features = ["derive"] }
+axum = { version = "0.8", features = ["ws", "multipart"] }
+rust-embed = { version = "8", features = ["mime-guess"] }
+futures-util = "0.3"
+
+[dev-dependencies]
+reqwest = { version = "0.12", default-features = false, features = ["json", "multipart"] }
+tokio-tungstenite = "0.26"

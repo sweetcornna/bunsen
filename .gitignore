@@ -1,0 +1,10 @@
+target/
+node_modules/
+ui/dist/
+dev/test-server/.tmp/
+dev/test-server/authorized_keys
+.claude/
+.env
+.env.*
+.DS_Store
+*.log

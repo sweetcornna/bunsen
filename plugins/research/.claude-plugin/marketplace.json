@@ -1,0 +1,15 @@
+{
+  "$schema": "https://json.schemastore.org/claude-code-marketplace.json",
+  "name": "research-plugin",
+  "owner": {
+    "name": "local"
+  },
+  "description": "自主科研循环插件的本地市场。",
+  "plugins": [
+    {
+      "name": "research",
+      "source": "./",
+      "description": "自主科研循环：统筹者加执行者、调研员、审计员子代理；预登记、数字可追溯、独立审计、等待不空转。"
+    }
+  ]
+}

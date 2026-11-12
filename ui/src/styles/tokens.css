@@ -1,0 +1,111 @@
+/* 设计令牌。参照对 Claude Desktop 的分析：暖灰分层、单色边框按透明度分档、蓝色只表示交互、
+   暖色只给主要动作。字体用系统字体栈，标题语气用系统衬线。 */
+:root {
+  --font-ui: -apple-system, BlinkMacSystemFont, "SF Pro Text", system-ui, "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", "Segoe UI", sans-serif;
+  --font-serif: ui-serif, "New York", "Iowan Old Style", Georgia, "Songti SC", "Noto Serif CJK SC", serif;
+  --font-mono: ui-monospace, "SF Mono", SFMono-Regular, Menlo, Monaco, Consolas, "PingFang SC", monospace;
+
+  --fs-xs: 11px;
+  --fs-sm: 12px;
+  --fs-md: 13px;
+  --fs-lg: 15px;
+  --fs-xl: 22px;
+
+  --r-sm: 4px;
+  --r-md: 6px;
+  --r-lg: 10px;
+  --r-xl: 14px;
+
+  --sidebar-w: 256px;
+  --ease: cubic-bezier(0.165, 0.84, 0.44, 1);
+  --ease-snap: cubic-bezier(0.32, 0.72, 0, 1);
+  --fast: 120ms;
+  --base: 200ms;
+}
+
+:root,
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --edge: 51 16.5% 84.5%;
+  --bg-app: hsl(30 3.3% 11.8%);
+  --bg-0: hsl(60 2.7% 14.5%);
+  --bg-1: hsl(60 2.4% 16.4%);
+  --bg-2: hsl(60 2.1% 18.4%);
+  --bg-3: hsl(60 2% 21.5%);
+  --bg-4: hsl(60 2% 25%);
+  --sunken: hsl(60 2.6% 10.5%);
+  --tint: hsl(var(--edge) / 0.04);
+  --tint-strong: hsl(var(--edge) / 0.08);
+  --line-faint: hsl(var(--edge) / 0.07);
+  --line: hsl(var(--edge) / 0.11);
+  --line-strong: hsl(var(--edge) / 0.2);
+  --fg-0: hsl(48 33.3% 97.1%);
+  --fg-1: hsl(50 9% 73.7%);
+  --fg-2: hsl(48 4.8% 59.2%);
+  --fg-on-accent: #ffffff;
+  --accent: hsl(210 70.9% 51.6%);
+  --accent-hover: hsl(210 70.9% 57%);
+  --accent-text: hsl(210 65.5% 67.1%);
+  --accent-soft: hsl(210 70.9% 51.6% / 0.16);
+  --accent-line: hsl(210 70.9% 51.6% / 0.6);
+  --brand: hsl(15 63.1% 59.6%);
+  --brand-hover: hsl(15 54.2% 51.2%);
+  --ok: hsl(97 59.1% 52%);
+  --ok-soft: hsl(97 59.1% 46.1% / 0.14);
+  --warn: hsl(40 96% 58%);
+  --warn-soft: hsl(40 96% 54% / 0.13);
+  --err: hsl(0 90% 73%);
+  --err-soft: hsl(0 67% 59.6% / 0.16);
+  --overlay: rgba(0, 0, 0, 0.5);
+  --shadow-card: 0 0 0 1px hsl(var(--edge) / 0.1), 0 4px 20px rgba(0, 0, 0, 0.18);
+  --shadow-panel: 0 0 0 1px hsl(var(--edge) / 0.08);
+  --pop-shadow: 0 0 0 1px hsl(var(--edge) / 0.14), 0 8px 24px rgba(0, 0, 0, 0.32), 0 2px 6px rgba(0, 0, 0, 0.2);
+  --term-bg: hsl(60 2.7% 14.5%);
+  --term-fg: hsl(48 20% 90%);
+  --scroll: hsl(var(--edge) / 0.16);
+  --scroll-hover: hsl(var(--edge) / 0.28);
+  --checker: hsl(60 2% 19%);
+}
+
+:root[data-theme="light"] {
+  color-scheme: light;
+  --edge: 30 3.3% 11.8%;
+  --bg-app: hsl(53 28.6% 94.5%);
+  --bg-0: hsl(48 33.3% 97.1%);
+  --bg-1: hsl(48 30% 98.4%);
+  --bg-2: #ffffff;
+  --bg-3: hsl(48 25% 92.2%);
+  --bg-4: hsl(50 20.7% 88.6%);
+  --sunken: hsl(53 28.6% 94.5%);
+  --tint: hsl(var(--edge) / 0.035);
+  --tint-strong: hsl(var(--edge) / 0.07);
+  --line-faint: hsl(var(--edge) / 0.07);
+  --line: hsl(var(--edge) / 0.12);
+  --line-strong: hsl(var(--edge) / 0.22);
+  --fg-0: hsl(60 2.6% 7.6%);
+  --fg-1: hsl(60 2.5% 23.3%);
+  --fg-2: hsl(51 3.1% 43.7%);
+  --fg-on-accent: #ffffff;
+  --accent: hsl(210 70.9% 51.6%);
+  --accent-hover: hsl(210 73.7% 44%);
+  --accent-text: hsl(210 73.7% 40.2%);
+  --accent-soft: hsl(210 70.9% 51.6% / 0.11);
+  --accent-line: hsl(210 70.9% 51.6% / 0.55);
+  --brand: hsl(15 54.2% 51.2%);
+  --brand-hover: hsl(15 56% 45%);
+  --ok: hsl(103 72.3% 26.9%);
+  --ok-soft: hsl(103 72.3% 26.9% / 0.1);
+  --warn: hsl(36 100% 30%);
+  --warn-soft: hsl(36 100% 36% / 0.11);
+  --err: hsl(0 56.2% 45.4%);
+  --err-soft: hsl(0 56.2% 45.4% / 0.09);
+  --overlay: rgba(20, 20, 19, 0.28);
+  --shadow-card: 0 0 0 1px hsl(var(--edge) / 0.1), 0 4px 20px rgba(0, 0, 0, 0.05);
+  --shadow-panel: 0 0 0 1px hsl(var(--edge) / 0.09);
+  --pop-shadow: 0 0 0 1px hsl(var(--edge) / 0.12), 0 8px 24px rgba(0, 0, 0, 0.12), 0 2px 6px rgba(0, 0, 0, 0.08);
+  --term-bg: hsl(48 33.3% 97.1%);
+  --term-fg: hsl(60 2.6% 12%);
+  --scroll: hsl(var(--edge) / 0.18);
+  --scroll-hover: hsl(var(--edge) / 0.3);
+  --checker: hsl(48 20% 90%);
+}

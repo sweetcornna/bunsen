@@ -1,0 +1,6 @@
+.loop/
+runs/*/log.txt
+runs/*/pid
+runs/*/sup.pid
+runs/*/*.tmp
+__pycache__/

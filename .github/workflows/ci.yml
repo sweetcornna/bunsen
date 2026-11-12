@@ -1,0 +1,71 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: test (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, macos-14]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          package_json_file: ui/package.json
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: ui/pnpm-lock.yaml
+      - name: Build UI
+        run: |
+          pnpm -C ui install --frozen-lockfile
+          pnpm -C ui build
+      - uses: Swatinem/rust-cache@v2
+      - name: Test
+        run: cargo test --workspace --locked
+      - name: Smoke
+        run: |
+          cargo run --locked -q -p outpost-cli -- --version
+          cargo run --locked -q -p outpost-cli -- plugins
+
+  # Windows 上只做构建和不需要服务器的冒烟：单元测试里有一部分要用 sh / bash 实际执行脚本。
+  windows:
+    name: build (windows)
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          package_json_file: ui/package.json
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: ui/pnpm-lock.yaml
+      - name: Build UI
+        run: |
+          pnpm -C ui install --frozen-lockfile
+          pnpm -C ui build
+      - uses: Swatinem/rust-cache@v2
+      - name: Build
+        run: cargo build --locked -p outpost-cli
+      - name: Smoke
+        shell: bash
+        run: |
+          target/debug/outpost.exe --version
+          target/debug/outpost.exe plugins
+          target/debug/outpost.exe --json agents > /dev/null
