@@ -148,6 +148,8 @@ flowchart LR
 ```
 
 - **插件随部署下发**。插件编进了可执行文件，部署时同步到服务器的 `~/.bunsen/plugins/`；Claude Code 直接加载（`/research:start`、`/research:resume`、`/research:status`），其它 Agent 在首条消息里被指向同一套流程文档。密钥、`.env`、实验室档案不会被同步。
+- **本机也是一台服务器**。服务器列表里固定有“本机”，会话跑在这台电脑的 tmux 里，不经 ssh；部署、终端、科研面板和远程服务器完全一样。不想要时设 `BUNSEN_NO_LOCAL=1`。
+- **研究项目**把几台机器上的同一项研究汇到一处。部署时选“接入研究项目”，每台机器把自己的记录推到汇合点（任一 git 仓库，或某台服务器上的裸仓库）的 `sync/<代号>` 分支，由插件的 `rk sync` 自动并入研究分支。项目页显示每台机器的进度、是否会冲突、各条研究线现在由谁推进、所有运行，以及需要你决定的事；“立即同步”让每台机器同步一次。
 - **科研面板**读工作目录下的 `research/`：运行（日志、指标、结果页，在跑的自动刷新）、结论账本、想法、总览。
 - **产物**汇总图、表、PDF、Notebook、网页，带缩略图和预览，并标出大概出自哪次运行。
 - **显卡**实时显示每张卡的占用和使用者，避免抢到别人的卡。
@@ -190,6 +192,9 @@ bunsen sessions
 bunsen send <id> '先跑单元测试'
 bunsen capture <id> --lines 40
 bunsen attach <id>
+bunsen project add demo git@github.com:me/demo-research.git
+bunsen deploy --server local --agent claude-code --workdir '~/demo' --project demo
+bunsen project view demo
 ```
 
 作为 MCP 服务，让另一个 Agent 来调度这些研究会话、读运行记录和产物：

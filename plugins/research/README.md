@@ -7,14 +7,14 @@
 ## 安装
 
 ```bash
-claude plugin marketplace add /path/to/research_plugin
+claude plugin marketplace add /Users/cornna/project/research_plugin
 ```
 
 ```bash
 claude plugin install research@research-plugin --scope user
 ```
 
-桌面应用里也可以从 **+ → Add plugins** 添加本地市场。只想临时试用：`claude --plugin-dir /path/to/research_plugin`。
+桌面应用里也可以从 **+ → Add plugins** 添加本地市场。只想临时试用：`claude --plugin-dir /Users/cornna/project/research_plugin`。
 
 钩子需要 `bash` 和 `jq`；工具脚本需要 Python 3.8 以上（只用标准库）。缺 `jq` 时钩子自动放行，不会卡住会话。
 
@@ -89,8 +89,19 @@ claude plugin install research@research-plugin --scope user
 研究项目是一个 git 仓库，本机和服务器各有一份检出，经同一个远端汇合。一条研究线同一时刻只由一台机器推进，这份推进权登记在两台机器都能连上的协调主机上（`collab.py lease`，编号只增不减）；`rk line config --collab "ssh <别名> python3 <目录>/collab.py"` 告诉 rk 去哪里找它。
 
 - `rk line new <线>` 建线并取得推进权；`rk line take <线>` 在这台机器上接手；`rk line status` 查看各线在哪。
-- `/research:handoff <线> <机器代号>`（命令是 `rk handoff`）先做前置检查（没提交的改动、没推送、没跑完的运行、目标机器连不上……逐条给出修复办法），再写交接摘要、推送、转移推进权；接手的机器 `git pull`、`rk line take`、`/research:resume`。中途失败可以原样重跑。
+- `/research:handoff <线> <机器代号>`（命令是 `rk handoff`）先做前置检查（没提交的改动、没推送、没跑完的运行、目标机器连不上……逐条给出修复办法），再写交接摘要、推送、转移推进权；接手的机器 `rk sync --pull`、`rk line take`、`/research:resume`。中途失败可以原样重跑。
 - 没有推进权的机器改 `state/<线>.md` 会被钩子拦下。失联的旧推进者在被接管之后还写了、合并进来的，`rk check` 按提交历史查出来，要求持有者核对后重新盖章。
+
+### 自动汇合（rk sync）
+
+几台机器同时推进时，在每台机器上执行一次 `rk sync --setup --branch research/<简称>`（汇合点默认是 `origin`，`--hub` 可以换）。之后：
+
+- 每台机器只写自己的分支 `sync/<代号>`，研究记录随 `rk run`、`rk done`、审计登记、研究线变更在后台自动提交并推上汇合点；随时可以手工 `rk sync`。
+- 同步时先并入共同的研究分支 `research/<简称>`，再把研究分支快进到本机的提交。不需要专门负责合并的机器；两台同时推时后到的一台重取、重并、重推。
+- 两边改了同一处时研究分支不动，本机的 `sync/<代号>` 照样推上去，别的机器看得到；`rk sync` 指出冲突的文件，`rk check` 给警告，解决之前不能接手研究线。
+- 汇合点连不上时记录先提交在本机，恢复后 `rk sync` 补上。
+- `rk sync --status` 只看现状、不连网；设了研究分支之后 `rk line take`、`rk handoff` 都经研究分支取、推记录，不再用 `git pull`。
+- 设置存在本仓库的 git config（`rk.branch`、`rk.hub`），不入库；没设时一切照旧按当前分支推拉。设 `RK_NO_AUTOSYNC=1` 关掉后台同步。
 
 ## 共享实验室算力（可选）
 

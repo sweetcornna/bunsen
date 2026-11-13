@@ -2,6 +2,7 @@
 
 use crate::core::{target, tmux_missing, Core, OP_TIMEOUT};
 use crate::error::{Code, Error, Result};
+use crate::exec::LOCAL_ID;
 use crate::model::*;
 use crate::plugins;
 use crate::shell::{build_launch, pane_command, quote, quote_path, LaunchOpts};
@@ -46,7 +47,7 @@ impl Steps {
         let ms = self.started.elapsed().as_millis() as u64;
         if let Some(s) = self.list.last_mut() {
             s.status = status;
-            s.detail = detail;
+            s.detail = detail.map(|s| crate::error::redact(&s));
             s.ms = Some(ms);
         }
         self.emit();
@@ -67,7 +68,7 @@ impl Steps {
             step: step.into(),
             label: label.into(),
             status: StepStatus::Skipped,
-            detail: Some(detail.into()),
+            detail: Some(crate::error::redact(detail)),
             ms: None,
         });
         self.emit();
@@ -75,8 +76,7 @@ impl Steps {
 }
 
 fn gone(id: &str) -> Error {
-    Error::conflict(format!("会话 {id} 在服务器上已经不存在"))
-        .with_hint("会话已停止；可以用“重启”在原工作目录里重新拉起代理")
+    Error::conflict(format!("会话 {id} 在服务器上已经不存在")).with_hint("会话已停止；可以用“重启”在原工作目录里重新拉起代理")
 }
 
 fn dead(id: &str) -> Error {
@@ -95,16 +95,15 @@ fn meta_json(s: &Session, extra_args: &Option<String>) -> String {
         "plugins": s.plugins,
         "yolo": s.yolo,
         "extra_args": extra_args,
+        "project_id": s.project_id,
+        "machine": s.machine,
         "created_by": "bunsen",
     })
     .to_string()
 }
 
 fn write_meta_script(id: &str, json: &str) -> String {
-    format!(
-        "mkdir -p \"$HOME/.bunsen/sessions\" && printf '%s\\n' {} > \"$HOME/.bunsen/sessions/{id}.json\"\n",
-        quote(json)
-    )
+    format!("mkdir -p \"$HOME/.bunsen/sessions\" && printf '%s\\n' {} > \"$HOME/.bunsen/sessions/{id}.json\"\n", quote(json))
 }
 
 fn single_line_title(s: &str) -> String {
@@ -126,16 +125,16 @@ impl Core {
         let mut s = r.session.clone();
         normalize_plugins(&mut s);
         s.tmux = tmux::agent_session(&s.id);
-        s.attach_cmd = self.attach_cmd(&s.server_alias, &s.id);
+        s.attach_cmd = if s.server_id == LOCAL_ID {
+            format!("tmux -L bunsen attach-session -t {}", quote(&tmux::exact(&tmux::agent_session(&s.id))))
+        } else {
+            self.attach_cmd(&s.server_alias, &s.id)
+        };
         s
     }
 
     fn record(&self, id: &str) -> Result<SessionRecord> {
-        self.store
-            .sessions()?
-            .into_iter()
-            .find(|r| r.session.id == id)
-            .ok_or_else(|| Error::not_found(format!("没有 id 为 {id} 的会话")))
+        self.store.sessions()?.into_iter().find(|r| r.session.id == id).ok_or_else(|| Error::not_found(format!("没有 id 为 {id} 的会话")))
     }
 
     fn save_record(&self, rec: SessionRecord) -> Result<Session> {
@@ -153,7 +152,7 @@ impl Core {
     /// 一次 ssh 取回一台服务器上所有 op-<id> 会话的状态、预览与元数据。
     async fn fetch_remote(&self, sv: &Server) -> Result<BTreeMap<String, RemoteSession>> {
         let marker = format!("__OPM_{}__", short_id());
-        let out = self.ssh.run(&target(sv), &tmux::status_script(&marker), OP_TIMEOUT).await?;
+        let out = self.exec(sv, &tmux::status_script(&marker), OP_TIMEOUT).await?;
         if !out.text().contains(&format!("{marker} end")) {
             return Err(Error::new(Code::SshFailed, format!("读取会话状态失败：{}", out.err_line())));
         }
@@ -210,6 +209,8 @@ impl Core {
             preview: None,
             attach_cmd: String::new(),
             origin: Origin::Discovered,
+            project_id: st("project_id"),
+            machine: st("machine"),
         };
         Self::apply_remote(&mut s, Some(r));
         SessionRecord { session: s, extra_args: st("extra_args") }
@@ -218,7 +219,7 @@ impl Core {
     /// 会话列表。`refresh` 时逐台连服务器更新状态，并把服务器上发现的会话并入。
     pub async fn sessions(self: &Arc<Self>, refresh: bool) -> Result<Vec<Session>> {
         if refresh {
-            let servers = self.store.servers()?;
+            let servers = self.servers()?;
             let mut set = tokio::task::JoinSet::new();
             for sv in servers.clone() {
                 let core = Arc::clone(self);
@@ -266,7 +267,7 @@ impl Core {
     /// 连服务器取一个会话的最新状态；连不上时状态为 unreachable（不报错）。
     pub async fn session(&self, id: &str) -> Result<Session> {
         let mut rec = self.record(id)?;
-        match self.server(&rec.session.server_id) {
+        match self.server_by_id(&rec.session.server_id) {
             Err(_) => rec.session.state = SessionState::Unknown,
             Ok(sv) => {
                 rec.session.server_alias = sv.alias.clone();
@@ -319,14 +320,14 @@ impl Core {
             let core = Arc::clone(self);
             let r = rec.clone();
             tokio::spawn(async move {
-                if let Ok(sv) = core.server(&r.session.server_id) {
+                if let Ok(sv) = core.server_by_id(&r.session.server_id) {
                     let json = meta_json(&r.session, &r.extra_args);
                     let script = format!(
                         "if [ -f \"$HOME/.bunsen/sessions/{id}.json\" ]; then {}fi\n",
                         write_meta_script(&r.session.id, &json),
                         id = r.session.id
                     );
-                    let _ = core.ssh.run(&target(&sv), &script, OP_TIMEOUT).await;
+                    let _ = core.exec(&sv, &script, OP_TIMEOUT).await;
                 }
             });
         }
@@ -335,7 +336,7 @@ impl Core {
 
     fn rec_and_server(&self, id: &str) -> Result<(SessionRecord, Server)> {
         let rec = self.record(id)?;
-        let sv = self.server(&rec.session.server_id)?;
+        let sv = self.server_by_id(&rec.session.server_id)?;
         Ok((rec, sv))
     }
 
@@ -381,7 +382,7 @@ impl Core {
             script.push_str(&format!("tmux -L bunsen send-keys -t {p} Enter || exit 6\n"));
         }
         script.push_str("echo __OP_DONE__\n");
-        let out = self.ssh.run(&target(&sv), &script, OP_TIMEOUT).await?;
+        let out = self.exec(&sv, &script, OP_TIMEOUT).await?;
         Self::check_guard(id, &out.text())?;
         if out.code != 0 || !out.text().contains("__OP_DONE__") {
             return Err(Error::new(Code::SshFailed, format!("发送失败：{}", out.err_line())));
@@ -403,8 +404,12 @@ impl Core {
         let sess = tmux::agent_session(&rec.session.id);
         let mut script = Self::alive_guard(&sess);
         let ks: Vec<String> = keys.iter().map(|k| quote(k)).collect();
-        script.push_str(&format!("tmux -L bunsen send-keys -t {} {} || exit 6\necho __OP_DONE__\n", quote(&tmux::pane(&sess)), ks.join(" ")));
-        let out = self.ssh.run(&target(&sv), &script, OP_TIMEOUT).await?;
+        script.push_str(&format!(
+            "tmux -L bunsen send-keys -t {} {} || exit 6\necho __OP_DONE__\n",
+            quote(&tmux::pane(&sess)),
+            ks.join(" ")
+        ));
+        let out = self.exec(&sv, &script, OP_TIMEOUT).await?;
         Self::check_guard(id, &out.text())?;
         if out.code != 0 || !out.text().contains("__OP_DONE__") {
             return Err(Error::new(Code::SshFailed, format!("发送按键失败：{}", out.err_line())));
@@ -424,7 +429,7 @@ impl Core {
             ex = quote(&tmux::exact(&sess)),
             p = quote(&tmux::pane(&sess)),
         );
-        let out = self.ssh.run(&target(&sv), &script, OP_TIMEOUT).await?;
+        let out = self.exec(&sv, &script, OP_TIMEOUT).await?;
         let text = out.text();
         let Some((_, body)) = text.split_once("__OP_CAP__\n") else {
             if text.contains("__OP_GONE__") {
@@ -465,7 +470,12 @@ impl Core {
             None => None,
         };
         let respawn = match &cmd {
-            Some(c) => format!("tmux -L bunsen respawn-pane -k -t {} -c {} {} || exit 5\n", quote(&tmux::pane(&sess)), quote_path(&s.workdir), quote(c)),
+            Some(c) => format!(
+                "tmux -L bunsen respawn-pane -k -t {} -c {} {} || exit 5\n",
+                quote(&tmux::pane(&sess)),
+                quote_path(&s.workdir),
+                quote(c)
+            ),
             None => format!("tmux -L bunsen respawn-pane -k -t {} || exit 5\n", quote(&tmux::pane(&sess))),
         };
         let recreate = match &cmd {
@@ -476,7 +486,7 @@ impl Core {
             "if tmux -L bunsen has-session -t {ex} 2>/dev/null; then\n{respawn}else\n{recreate}fi\necho __OP_DONE__\n",
             ex = quote(&tmux::exact(&sess)),
         );
-        let out = self.ssh.run(&target(&sv), &script, OP_TIMEOUT).await?;
+        let out = self.exec(&sv, &script, OP_TIMEOUT).await?;
         let text = out.text();
         if text.contains("__OP_NO_TMUX__") {
             return Err(tmux_missing());
@@ -506,7 +516,7 @@ impl Core {
             quote(&tmux::exact(&tmux::agent_session(&s.id))),
             quote(&tmux::exact(&tmux::shell_session(&s.id))),
         );
-        let out = self.ssh.run(&target(&sv), &script, OP_TIMEOUT).await?;
+        let out = self.exec(&sv, &script, OP_TIMEOUT).await?;
         if !out.text().contains("__OP_DONE__") {
             return Err(Error::new(Code::SshFailed, format!("停止失败：{}", out.err_line())));
         }
@@ -519,7 +529,7 @@ impl Core {
     /// 删除记录。会话还在且 `force=false` 时返回 conflict；`force` 先停再删。
     pub async fn delete_session(&self, id: &str, force: bool) -> Result<()> {
         let rec = self.record(id)?;
-        let sv = self.server(&rec.session.server_id).ok();
+        let sv = self.server_by_id(&rec.session.server_id).ok();
         let alive = match &sv {
             Some(sv) => match self.fetch_remote(sv).await {
                 Ok(map) => map.contains_key(id),
@@ -537,7 +547,7 @@ impl Core {
                 quote(&tmux::exact(&tmux::shell_session(id))),
                 rec.session.id,
             );
-            let r = self.ssh.run(&target(sv), &script, OP_TIMEOUT).await;
+            let r = self.exec(sv, &script, OP_TIMEOUT).await;
             if alive {
                 // 强制删除时必须确实停掉；连不上就报错，免得留下没人管的会话。
                 r?;
@@ -556,9 +566,14 @@ impl Core {
         let pre = |e: Error| DeployFailure { error: e, steps: vec![] };
         let sv = self.server(req.server_id.trim()).map_err(pre)?;
         let agent = self.agent(req.agent_id.trim()).map_err(pre)?;
+        let project = req.project_id.as_deref().map(|id| self.project(id)).transpose().map_err(pre)?;
         let workdir = {
             let w = req.workdir.trim();
-            if w.is_empty() { sv.default_workdir.clone() } else { w.to_string() }
+            if w.is_empty() {
+                sv.default_workdir.clone()
+            } else {
+                w.to_string()
+            }
         };
         crate::sshconfig::validate_single_line("工作目录", &workdir).map_err(pre)?;
         let settings = self.settings().map_err(pre)?;
@@ -602,11 +617,10 @@ impl Core {
         .map_err(pre)?;
 
         let mut st = Steps { list: vec![], tx, started: Instant::now() };
-        let tg = target(&sv);
 
         // connect
-        st.begin("connect", "连接服务器");
-        let r = self.ssh.run(&tg, "echo __OP_OK__", crate::core::TEST_TIMEOUT).await.and_then(|o| {
+        st.begin("connect", if sv.is_local() { "检查本机" } else { "连接服务器" });
+        let r = self.exec(&sv, "echo __OP_OK__", crate::core::TEST_TIMEOUT).await.and_then(|o| {
             if o.text().contains("__OP_OK__") {
                 Ok(())
             } else {
@@ -617,11 +631,17 @@ impl Core {
         if let Err(e) = r {
             return Err(st.fail(e));
         }
-        st.ok(if sv.port == 22 { format!("{}@{}", sv.user, sv.host) } else { format!("{}@{}:{}", sv.user, sv.host, sv.port) });
+        st.ok(if sv.is_local() {
+            format!("本机（{}）", sv.user)
+        } else if sv.port == 22 {
+            format!("{}@{}", sv.user, sv.host)
+        } else {
+            format!("{}@{}:{}", sv.user, sv.host, sv.port)
+        });
 
         // tmux
         st.begin("tmux", "检查 tmux");
-        match self.ssh.run(&tg, &tmux::ensure_script(), OP_TIMEOUT).await {
+        match self.exec(&sv, &tmux::ensure_script(), OP_TIMEOUT).await {
             Err(e) => return Err(st.fail(e)),
             Ok(o) if o.text().contains("__OP_NO_TMUX__") => return Err(st.fail(tmux_missing())),
             Ok(o) => st.ok(o.text().lines().last().unwrap_or("tmux").trim().to_string()),
@@ -630,7 +650,7 @@ impl Core {
         // agent
         st.begin("agent", "查找代理程序");
         let script = format!("command -v {} 2>/dev/null || true\n", quote(&agent.detect));
-        match self.ssh.run(&tg, &script, OP_TIMEOUT).await {
+        match self.exec(&sv, &script, OP_TIMEOUT).await {
             Err(e) => return Err(st.fail(e)),
             Ok(o) => {
                 let path = o.text().lines().next().unwrap_or("").trim().to_string();
@@ -639,7 +659,9 @@ impl Core {
                         Some(i) => format!("可以在 Agent 面板里一键安装，或在服务器上执行：{}", i.cmd),
                         None => "确认它已安装并在 PATH 里；Bunsen 会额外查找 ~/.local/bin、~/.npm-global/bin、~/.bun/bin、~/.cargo/bin 和 nvm 目录，也可以在服务器的 ~/.bunsen/env.sh 里补充 PATH".to_string(),
                     };
-                    return Err(st.fail(Error::new(Code::AgentMissing, format!("服务器上找不到 {}（{}）", agent.name, agent.detect)).with_hint(hint)));
+                    return Err(st.fail(
+                        Error::new(Code::AgentMissing, format!("服务器上找不到 {}（{}）", agent.name, agent.detect)).with_hint(hint),
+                    ));
                 }
                 st.ok(path);
             }
@@ -648,12 +670,21 @@ impl Core {
         // workdir
         st.begin("workdir", "准备工作目录");
         let script = format!("mkdir -p {wd} && cd {wd} && pwd\n", wd = quote_path(&workdir));
-        match self.ssh.run(&tg, &script, OP_TIMEOUT).await {
+        match self.exec(&sv, &script, OP_TIMEOUT).await {
             Err(e) => return Err(st.fail(e)),
-            Ok(o) if o.code != 0 => {
-                return Err(st.fail(Error::bad_request(format!("工作目录 {workdir} 无法创建：{}", o.err_line()))))
-            }
+            Ok(o) if o.code != 0 => return Err(st.fail(Error::bad_request(format!("工作目录 {workdir} 无法创建：{}", o.err_line())))),
             Ok(o) => st.ok(o.text().lines().last().unwrap_or("").trim().to_string()),
+        }
+
+        // project：本机与远程共用接入脚本。
+        let mut machine = None;
+        if let Some(p) = &project {
+            st.begin("project", "接入研究项目");
+            let (code, detail) = self.setup_project(p, &sv, &workdir).await.map_err(|e| st.fail(e))?;
+            machine = code;
+            st.ok(detail);
+        } else {
+            st.skip("project", "接入研究项目", "未接入研究项目");
         }
 
         // plugin
@@ -704,6 +735,8 @@ impl Core {
             preview: None,
             attach_cmd: String::new(),
             origin: Origin::Local,
+            project_id: project.as_ref().map(|p| p.id.clone()),
+            machine: machine.clone(),
         };
         let pane_cmd = pane_command(&workdir, &launch.cmd);
         let script = format!(
@@ -711,7 +744,7 @@ impl Core {
             tmux::new_session_script(&sess, &workdir, &pane_cmd),
             write_meta_script(&id, &meta_json(&session, &extra_args))
         );
-        match self.ssh.run(&tg, &script, OP_TIMEOUT).await {
+        match self.exec(&sv, &script, OP_TIMEOUT).await {
             Err(e) => return Err(st.fail(e)),
             Ok(o) if o.code != 0 || !o.text().contains("__OP_DONE__") => {
                 return Err(st.fail(Error::new(Code::SshFailed, format!("启动 tmux 会话失败：{}", o.err_line()))))
@@ -727,8 +760,12 @@ impl Core {
         // verify
         st.begin("verify", "确认代理在运行");
         tokio::time::sleep(Duration::from_secs(1)).await;
-        let script = format!("{}tmux -L bunsen capture-pane -p -J -t {} -S -20 2>/dev/null\n", tmux::pane_state_script(&sess), quote(&tmux::pane(&sess)));
-        let out = match self.ssh.run(&tg, &script, OP_TIMEOUT).await {
+        let script = format!(
+            "{}tmux -L bunsen capture-pane -p -J -t {} -S -20 2>/dev/null\n",
+            tmux::pane_state_script(&sess),
+            quote(&tmux::pane(&sess))
+        );
+        let out = match self.exec(&sv, &script, OP_TIMEOUT).await {
             Ok(o) => o,
             Err(e) => return Err(st.fail(e)),
         };
@@ -740,7 +777,9 @@ impl Core {
         if first == "__OP_GONE__" {
             Self::apply_remote(&mut rec.session, None);
             let _ = self.save_record(rec);
-            return Err(st.fail(Error::internal("tmux 会话启动后马上消失了").with_hint("检查服务器上的 tmux 是否正常（tmux -L bunsen ls）")));
+            return Err(
+                st.fail(Error::internal("tmux 会话启动后马上消失了").with_hint("检查服务器上的 tmux 是否正常（tmux -L bunsen ls）"))
+            );
         }
         let pane = tmux::parse_pane_line(&first).unwrap_or_default();
         if pane.dead {
@@ -752,8 +791,11 @@ impl Core {
             let e = if pane.dead_status == Some(127) {
                 Error::new(Code::AgentMissing, format!("代理启动失败：找不到命令（退出码 127）：{last}"))
             } else {
-                Error::internal(format!("代理启动后立即退出（退出码 {code}）"))
-                    .with_hint(if last.is_empty() { "接入会话查看输出".to_string() } else { format!("最后的输出：{last}") })
+                Error::internal(format!("代理启动后立即退出（退出码 {code}）")).with_hint(if last.is_empty() {
+                    "接入会话查看输出".to_string()
+                } else {
+                    format!("最后的输出：{last}")
+                })
             };
             return Err(st.fail(e));
         }
@@ -789,19 +831,24 @@ impl Core {
             };
             staged.push((a.info.name.clone(), dir, a.info.skills.len()));
         }
-        let out = self
-            .ssh
-            .run(&target(sv), "mkdir -p \"$HOME/.bunsen/plugins\" || exit 7\ncommand -v rsync 2>/dev/null || true\n", OP_TIMEOUT)
-            .await?;
+        let out = self.exec(sv, "mkdir -p \"$HOME/.bunsen/plugins\" || exit 7\ncommand -v rsync 2>/dev/null || true\n", OP_TIMEOUT).await?;
         if out.code != 0 {
             return Err(Error::new(Code::SshFailed, format!("无法在服务器上创建插件目录：{}", out.err_line())));
         }
         let remote_rsync = out.text().lines().next().unwrap_or("").trim().to_string();
         // BUNSEN_SYNC_METHOD=tar 强制走 tar 回退（测试与排障用）。
         let force_tar = std::env::var("BUNSEN_SYNC_METHOD").ok().as_deref() == Some("tar");
-        let use_rsync = !force_tar && !remote_rsync.is_empty() && local_has("rsync").await;
+        let use_rsync = !sv.is_local() && !force_tar && !remote_rsync.is_empty() && local_has("rsync").await;
         for (name, dir, _) in &staged {
-            if use_rsync {
+            if sv.is_local() {
+                // 本机：直接复制到 ~/.bunsen/plugins/.<name>.tmp，再走下面同一套替换。
+                let home = std::env::var_os("HOME").ok_or_else(|| Error::internal("取不到本机的 HOME"))?;
+                let (src, dst) = (dir.clone(), Path::new(&home).join(format!(".bunsen/plugins/.{name}.tmp")));
+                tokio::task::spawn_blocking(move || crate::exec::copy_dir(&src, &dst))
+                    .await
+                    .map_err(|e| Error::internal(format!("复制插件失败：{e}")))?
+                    .map_err(|e| Error::internal(format!("复制插件到本机插件目录失败：{e}")))?;
+            } else if use_rsync {
                 self.rsync_dir(sv, dir, &format!(".bunsen/plugins/.{name}.tmp/"), &remote_rsync).await?;
             } else {
                 self.tar_dir(sv, dir, &format!(".bunsen/plugins/.{name}.tmp")).await?;
@@ -814,21 +861,15 @@ impl Core {
             let old = quote(&format!(".{name}.old"));
             // 从 Windows 打包过来的文件没有可执行位，这里按同一套规则补上（脚本、tools 下的 py、带 #! 的文件）。
             swap.push_str(&FIX_EXEC.replace("__DIR__", &tmp));
-            swap.push_str(&format!(
-                "rm -rf {old} && {{ [ ! -e {n} ] || mv {n} {old}; }} && mv {tmp} {n} && rm -rf {old} || exit 8\n"
-            ));
+            swap.push_str(&format!("rm -rf {old} && {{ [ ! -e {n} ] || mv {n} {old}; }} && mv {tmp} {n} && rm -rf {old} || exit 8\n"));
         }
         swap.push_str("echo __OP_DONE__\n");
-        let out = self.ssh.run(&target(sv), &swap, OP_TIMEOUT).await?;
+        let out = self.exec(sv, &swap, OP_TIMEOUT).await?;
         if !out.text().contains("__OP_DONE__") {
             return Err(Error::new(Code::SshFailed, format!("替换服务器上的插件目录失败：{}", out.err_line())));
         }
-        let mut detail = staged
-            .iter()
-            .map(|(n, _, skills)| format!("{n} · {skills} 个技能"))
-            .collect::<Vec<_>>()
-            .join("；");
-        if !use_rsync {
+        let mut detail = staged.iter().map(|(n, _, skills)| format!("{n} · {skills} 个技能")).collect::<Vec<_>>().join("；");
+        if !use_rsync && !sv.is_local() {
             detail.push_str("（经 tar：本机或服务器没有 rsync）");
         }
         Ok(detail)
@@ -849,9 +890,7 @@ impl Core {
             .stderr(std::process::Stdio::piped())
             .kill_on_drop(true)
             .output();
-        let out = tokio::time::timeout(Duration::from_secs(600), child)
-            .await
-            .map_err(|_| Error::timeout("同步插件超时（10 分钟）"))??;
+        let out = tokio::time::timeout(Duration::from_secs(600), child).await.map_err(|_| Error::timeout("同步插件超时（10 分钟）"))??;
         if !out.status.success() {
             let err = String::from_utf8_lossy(&out.stderr);
             let last = err.lines().map(str::trim).rfind(|l| !l.is_empty()).unwrap_or("").to_string();
@@ -950,6 +989,8 @@ mod tests {
             preview: None,
             attach_cmd: String::new(),
             origin: Origin::Local,
+            project_id: None,
+            machine: None,
         };
         let j: serde_json::Value = serde_json::from_str(&meta_json(&s, &Some("--x".into()))).unwrap();
         assert_eq!(j["title"], "it's 中文");
@@ -957,5 +998,33 @@ mod tests {
         assert_eq!(j["extra_args"], "--x");
         let script = write_meta_script("abc123", &meta_json(&s, &None));
         assert!(script.contains("> \"$HOME/.bunsen/sessions/abc123.json\""));
+    }
+    #[test]
+    fn project_metadata_roundtrip_and_old_records() {
+        let root = std::env::temp_dir().join(format!("bunsen-meta-project-{}", short_id()));
+        let core = Core::open_at(crate::store::Paths { data: root.join("data"), cm_dir: root.join("cm") }).unwrap();
+        let server = core.server("local").unwrap();
+        let remote = RemoteSession {
+            id: "abc123".into(),
+            meta: Some(
+                serde_json::json!({
+                    "title":"项目会话", "project_id":"proj01", "machine":"mac"
+                })
+                .to_string(),
+            ),
+            ..Default::default()
+        };
+        let rec = core.discovered(&server, &remote);
+        assert_eq!(rec.session.project_id.as_deref(), Some("proj01"));
+        assert_eq!(rec.session.machine.as_deref(), Some("mac"));
+        let meta: serde_json::Value = serde_json::from_str(&meta_json(&rec.session, &None)).unwrap();
+        assert_eq!(meta["project_id"], "proj01");
+        assert_eq!(meta["machine"], "mac");
+        let mut old = serde_json::to_value(&rec.session).unwrap();
+        old.as_object_mut().unwrap().remove("project_id");
+        old.as_object_mut().unwrap().remove("machine");
+        let old: Session = serde_json::from_value(old).unwrap();
+        assert!(old.project_id.is_none() && old.machine.is_none());
+        std::fs::remove_dir_all(root).unwrap();
     }
 }

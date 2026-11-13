@@ -36,6 +36,6 @@ EOF
     echo "【research】本项目有一个开着的研究循环（$(sed -n 's/^started: *//p' "$home/.loop/active" | head -n1) 启动）。接着做用 /research:resume；只看进展用 /research:status；停下用 /research:stop。"
   fi
 else
-  [ "$src" = "compact" ] || echo "【research】本项目是 research 插件管理的研究项目（研究目录 $home），循环当前未运行。继续用 /research:resume，只看进展用 /research:status。"
+  [ "$src" = "compact" ] || echo "【research】本项目是 research 插件管理的研究项目（研究目录 ${home}），循环当前未运行。继续用 /research:resume，只看进展用 /research:status。"
 fi
 exit 0

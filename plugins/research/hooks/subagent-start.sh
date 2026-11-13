@@ -12,13 +12,13 @@ type=$(printf '%s' "$input" | jq -r '.agent_type // ""' 2>/dev/null)
 plugin="${CLAUDE_PLUGIN_ROOT:-$(cd "$(dirname "$0")/.." && pwd)}"
 proto="$plugin/skills/protocol/SKILL.md"
 rk="python3 $home/tools/rk.py"
-where="研究目录（主检出）：$home；任务说明给了别的工作树时以任务说明为准。"
+where="研究目录（主检出）：${home}；任务说明给了别的工作树时以任务说明为准。"
 
 case "$type" in
   research:executor)
-    msg="【research】你是本项目的研究执行者。${where}研究协议：$proto（同目录 references/ 有 modes.md、compute.md）。工具：$rk。不确定进行到哪时（例如上下文刚被压缩），先重读协议、PROJECT.md、你这条线在 LOG.md 末尾的记录和 $rk status，再接着做；不凭记忆行动，不重做已有产物的步骤。" ;;
+    msg="【research】你是本项目的研究执行者。${where}研究协议：${proto}（同目录 references/ 有 modes.md、compute.md）。工具：${rk}。不确定进行到哪时（例如上下文刚被压缩），先重读协议、PROJECT.md、你这条线在 LOG.md 末尾的记录和 $rk status，再接着做；不凭记忆行动，不重做已有产物的步骤。" ;;
   research:auditor)
-    msg="【research】你是本项目的审计员。${where}研究协议：$proto。只读；只信原始记录（runs/、预登记、代码与提交历史），结果页和任何总结都是被审计的对象。报告开头写两行：“运行：<运行ID，逗号分隔>”和“总评：可采信 / 需退回 / 不可采信”，统筹者会把报告原样存档并用 rk audit record 按这两行登记，rk check 据此判断结论能否升为已证实或已否定。" ;;
+    msg="【research】你是本项目的审计员。${where}研究协议：${proto}。只读；只信原始记录（runs/、预登记、代码与提交历史），结果页和任何总结都是被审计的对象。报告开头写两行：“运行：<运行ID，逗号分隔>”和“总评：可采信 / 需退回 / 不可采信”，统筹者会把报告原样存档并用 rk audit record 按这两行登记，rk check 据此判断结论能否升为已证实或已否定。" ;;
   research:scout)
     msg="【research】你是本项目的调研员。${where}只读。已有结论和已排除的做法在 LEDGER.md、IDEAS.md、LESSONS.md；每条结论带出处，没核实的标“未核实”，不编数字。" ;;
   *) exit 0 ;;

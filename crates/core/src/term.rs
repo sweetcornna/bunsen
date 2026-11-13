@@ -27,7 +27,12 @@ pub enum TermTarget {
 
 /// 远程要执行的接入命令（`None` 表示普通登录 shell）。
 pub fn remote_command(t: &TermTarget, workdir: Option<&str>) -> Option<String> {
-    let inner = match t {
+    inner_command(t, workdir).map(|inner| format!("bash -lc {}", quote(&inner)))
+}
+
+/// 接入命令本身（交给 `bash -lc`）。
+pub fn inner_command(t: &TermTarget, workdir: Option<&str>) -> Option<String> {
+    Some(match t {
         TermTarget::Agent { session } => {
             format!("{PATH_PRELUDE}; exec {TMUX} attach-session -t {}", quote(&tmux::exact(&tmux::agent_session(session))))
         }
@@ -42,13 +47,21 @@ pub fn remote_command(t: &TermTarget, workdir: Option<&str>) -> Option<String> {
             ex = quote(&tmux::exact(&tmux::install_session(agent_id))),
             s = tmux::install_session(agent_id),
         ),
-    };
-    Some(format!("bash -lc {}", quote(&inner)))
+    })
+}
+
+/// 终端里要跑的程序：远程是 `ssh -tt …`，本机直接是 `bash -lc …`（或登录 shell）。
+#[derive(Debug, Clone, PartialEq)]
+pub struct TermCommand {
+    pub program: String,
+    pub args: Vec<String>,
+    /// 本机：在 `$HOME` 下启动，并去掉会让代理误以为嵌套的环境变量
+    pub local: bool,
 }
 
 impl Core {
-    /// 组出 ssh 的参数（不含程序名 `ssh`）。
-    pub fn term_args(&self, t: &TermTarget) -> Result<Vec<String>> {
+    /// 组出终端要跑的命令：远程是 ssh 加参数，本机是 bash。
+    pub fn term_command(&self, t: &TermTarget) -> Result<TermCommand> {
         let (server_key, workdir) = match t {
             TermTarget::Agent { session } | TermTarget::Shell { session } => {
                 let rec = self
@@ -66,13 +79,27 @@ impl Core {
                 return Err(Error::bad_request("agent 参数不合法"));
             }
         }
-        let sv = self.server(&server_key)?;
+        let sv = if matches!(t, TermTarget::Agent { .. } | TermTarget::Shell { .. }) {
+            self.server_by_id(&server_key)?
+        } else {
+            self.server(&server_key)?
+        };
+        if sv.is_local() {
+            return Ok(match inner_command(t, workdir.as_deref()) {
+                Some(inner) => TermCommand { program: "bash".into(), args: vec!["-lc".into(), inner], local: true },
+                None => TermCommand {
+                    program: std::env::var("SHELL").ok().filter(|s| !s.trim().is_empty()).unwrap_or_else(|| "bash".into()),
+                    args: vec!["-l".into()],
+                    local: true,
+                },
+            });
+        }
         let mut args = self.ssh.tty_args();
         args.push(target(&sv));
         if let Some(cmd) = remote_command(t, workdir.as_deref()) {
             args.push(cmd);
         }
-        Ok(args)
+        Ok(TermCommand { program: "ssh".into(), args, local: false })
     }
 }
 
@@ -92,17 +119,27 @@ pub struct PtySpawn {
 }
 
 pub fn spawn(program: &str, args: &[String], cols: u16, rows: u16) -> Result<PtySpawn> {
+    spawn_command(&TermCommand { program: program.into(), args: args.to_vec(), local: false }, cols, rows)
+}
+
+pub fn spawn_command(tc: &TermCommand, cols: u16, rows: u16) -> Result<PtySpawn> {
+    let (program, args) = (tc.program.as_str(), &tc.args);
     let size = PtySize { rows: rows.max(2), cols: cols.max(10), pixel_width: 0, pixel_height: 0 };
-    let pair = native_pty_system()
-        .openpty(size)
-        .map_err(|e| Error::internal(format!("无法创建本机伪终端：{e}")))?;
+    let pair = native_pty_system().openpty(size).map_err(|e| Error::internal(format!("无法创建本机伪终端：{e}")))?;
     let mut cmd = CommandBuilder::new(program);
     cmd.args(args);
     cmd.env("TERM", "xterm-256color");
-    let mut child = pair
-        .slave
-        .spawn_command(cmd)
-        .map_err(|e| Error::internal(format!("无法启动 {program}：{e}")))?;
+    if tc.local {
+        if let Some(h) = std::env::var_os("HOME") {
+            cmd.cwd(h);
+        }
+        for (k, _) in std::env::vars_os() {
+            if k.to_str().is_some_and(crate::exec::scrub_var) {
+                cmd.env_remove(k);
+            }
+        }
+    }
+    let mut child = pair.slave.spawn_command(cmd).map_err(|e| Error::internal(format!("无法启动 {program}：{e}")))?;
     drop(pair.slave);
     let pid = child.process_id();
     let killer = child.clone_killer();
@@ -151,12 +188,7 @@ pub fn spawn(program: &str, args: &[String], cols: u16, rows: u16) -> Result<Pty
         .map_err(|e| Error::internal(format!("无法启动等待线程：{e}")))?;
 
     Ok(PtySpawn {
-        pty: Arc::new(Pty {
-            master: Mutex::new(pair.master),
-            killer: Mutex::new(killer),
-            input: Mutex::new(Some(in_tx)),
-            pid,
-        }),
+        pty: Arc::new(Pty { master: Mutex::new(pair.master), killer: Mutex::new(killer), input: Mutex::new(Some(in_tx)), pid }),
         output: out_rx,
         exit: exit_rx,
     })
@@ -186,11 +218,7 @@ impl Pty {
 
     pub fn resize(&self, cols: u16, rows: u16) -> Result<()> {
         let size = PtySize { rows: rows.clamp(2, 1000), cols: cols.clamp(10, 1000), pixel_width: 0, pixel_height: 0 };
-        self.master
-            .lock()
-            .unwrap_or_else(|p| p.into_inner())
-            .resize(size)
-            .map_err(|e| Error::internal(format!("调整终端大小失败：{e}")))
+        self.master.lock().unwrap_or_else(|p| p.into_inner()).resize(size).map_err(|e| Error::internal(format!("调整终端大小失败：{e}")))
     }
 
     /// 结束本机进程（先 SIGHUP，2 秒后还在就 SIGKILL）。不再接受输入。

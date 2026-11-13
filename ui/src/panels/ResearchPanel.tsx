@@ -282,7 +282,7 @@ export function ResearchPanel({ session, active, focusRun, onCompose, onQuote, o
 function Doc({ md, empty = "还没有内容" }: { md: string | null | undefined; empty?: string }) {
   return md?.trim() ? (
     <div className="pad">
-      <Markdown text={md} />
+      <Markdown text={md} images="link" />
     </div>
   ) : (
     <Empty title={empty} />
@@ -405,7 +405,7 @@ function RunView({ session, runId, run, home, onBack, onQuote, onFile }: { sessi
               </tbody>
             </table>
           ))}
-        {d && tab === "result" && (d.result_md?.trim() ? <div className="pad"><Markdown text={d.result_md} /></div> : <Empty title="没有结果页" />)}
+        {d && tab === "result" && (d.result_md?.trim() ? <div className="pad"><Markdown text={d.result_md} images="link" /></div> : <Empty title="没有结果页" />)}
         {d && tab === "meta" && <pre className="log">{JSON.stringify(d.meta, null, 2)}</pre>}
       </div>
     </div>

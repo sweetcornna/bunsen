@@ -2,6 +2,7 @@ import { ExternalLink, FlaskConical, Monitor, Moon, Pencil, RotateCcw, Sun } fro
 import { useEffect, useState } from "react";
 import { AgentMark, Button, Field, Modal, Picker, Segmented } from "../components/ui";
 import { api, type Agent, type Settings as SettingsT } from "../lib/api";
+import { serverAddr } from "../lib/format";
 import { useApp } from "../lib/store";
 
 export function Settings() {
@@ -56,7 +57,7 @@ export function Settings() {
               value={settings.default_server ?? "__last"}
               onChange={(v) => void save({ default_server: v === "__last" ? null : v })}
               placeholder="上次用的"
-              options={[{ value: "__last", label: "上次用的" }, ...servers.map((s) => ({ value: s.id, label: s.alias, hint: `${s.user}@${s.host}` }))]}
+              options={[{ value: "__last", label: "上次用的" }, ...servers.map((s) => ({ value: s.id, label: s.alias, hint: serverAddr(s) }))]}
             />
           </div>
           <div className="setting">

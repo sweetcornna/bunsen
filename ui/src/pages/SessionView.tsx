@@ -1,13 +1,14 @@
-import { Copy, CornerDownLeft, FileText, FlaskConical, Folder, GitCompare, Images, LayoutDashboard, MoreHorizontal, Paperclip, X, PanelRightClose, PanelRightOpen, Play, RotateCw, Server as ServerIcon, ShieldOff, SquareTerminal, Unplug } from "lucide-react";
+import { Copy, CornerDownLeft, FileText, FlaskConical, Folder, FolderGit2, GitCompare, Images, LayoutDashboard, MoreHorizontal, Paperclip, X, PanelRightClose, PanelRightOpen, Play, RotateCw, Server as ServerIcon, ShieldOff, SquareTerminal, Unplug } from "lucide-react";
 import { forwardRef, useEffect, useImperativeHandle, useRef, useState } from "react";
 import { Panel, PanelGroup, PanelResizeHandle } from "react-resizable-panels";
+import { ProjectName } from "../components/ProjectName";
 import { SessionMenu } from "../components/SessionMenu";
 import { TerminalView, type TermHandle } from "../components/Terminal";
 import { AgentMark, Button, cx, Empty, IconButton, Pill, Tip } from "../components/ui";
 import type { Quoted } from "../components/Preview";
 import { api, type Research, type Session } from "../lib/api";
 import { ArtifactsPanel } from "../panels/ArtifactsPanel";
-import { copyText, loadLocal, saveLocal, SESSION_STATE } from "../lib/format";
+import { copyText, loadLocal, saveLocal, sessionState } from "../lib/format";
 import { go } from "../lib/route";
 import { agentOf, serverOf, useApp } from "../lib/store";
 import { FilesPanel } from "../panels/FilesPanel";
@@ -88,7 +89,7 @@ export function SessionView({ id }: { id: string }) {
 
   const agent = agentOf(agents, session.agent_id);
   const server = serverOf(servers, session.server_id);
-  const st = SESSION_STATE[session.state];
+  const st = sessionState(session.state);
   const attachable = session.state === "running" || session.state === "exited" || session.state === "unknown";
 
   const pickTab = (t: Tab) => {
@@ -152,6 +153,17 @@ export function SessionView({ id }: { id: string }) {
             <ServerIcon size={12} />
             {session.server_alias}
           </span>
+          {session.project_id && (
+            <span>
+              <FolderGit2 size={12} />
+              <ProjectName id={session.project_id} />
+              {session.machine && (
+                <span className="tag mono" title="这台机器在项目里的代号（汇合点上的 sync 分支）">
+                  {session.machine}
+                </span>
+              )}
+            </span>
+          )}
           <span className="mono ellipsis" title={session.workdir}>
             <Folder size={12} />
             {session.workdir}

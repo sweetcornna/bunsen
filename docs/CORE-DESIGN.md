@@ -12,10 +12,11 @@ crates/core  (bunsen-core)
   src/error.rs             错误码、ssh 失败识别
   src/model.rs             API 数据类型
   src/util.rs              id、令牌、时间、原子写
-  src/store.rs             数据目录、JSON/TOML 持久化（进程内一把锁，每次读盘，写临时文件再 rename）
+  src/store.rs             数据目录、JSON/TOML 持久化（进程内一把锁 + 数据目录 .lock 文件锁，每次读盘，写临时文件再 rename）
   src/sshconfig.rs         上传的 ssh 配置解析；生成 <数据目录>/ssh/config
   src/shell.rs             单引号转义、路径转义（保留 ~）、PATH 前导、启动命令拼装
-  src/ssh.rs               调系统 ssh：`ssh -F cfg -o BatchMode=yes -T op-<服务器id> bash -s`，脚本走标准输入
+  src/exec.rs              执行器（v1.3）：同一段脚本，远程交给 ssh.rs，本机交给 `bash -s`；超时、取消、报错文案按执行位置区分
+  src/ssh.rs               调系统 ssh：`ssh -F cfg -o BatchMode=yes -T op-<服务器id> bash -s`，脚本走标准输入；远端受监督执行（取消标记、进程组）
   src/tmux.rs              远程 tmux 脚本与输出解析
   src/import.rs            上传内容识别（ZIP/私钥/公钥/配置/其他）与导入
   src/keys.rs              私钥存取、指纹（ssh-keygen -lf）
@@ -24,14 +25,17 @@ crates/core  (bunsen-core)
   src/workspace.rs         文件、git、科研面板、产物、原始字节、运行详情（v1.1）
   src/plugins.rs           内嵌插件（rust-embed，源在 plugins/）与本机目录插件：过滤、可执行位、展开到 plugins-cache（v1.2）
   build.rs                 plugins/ 与 agents.json 变了就重编
-  src/term.rs              本机伪终端里跑 ssh -tt（终端通道与 attach 用）
+  src/projects.rs          研究项目（v1.3）：汇合点只读镜像、跨机器视图、部署时的接入脚本、立即同步
+  src/projects_tests.rs    projects.rs 的测试（真实 git 仓库）
+  src/term.rs              本机伪终端里跑 ssh -tt，本机服务器直接跑 bash -lc（终端通道与 attach 用）
   src/core.rs              Core：对外的全部能力（服务、命令行、MCP 共用）
 crates/cli   (bunsen-cli，可执行文件 bunsen)
   src/main.rs              clap 子命令
   src/http.rs              axum：鉴权/防跨站中间件、/api/*、/ws/term、内嵌 ui/dist
   src/mcp.rs               stdio 上的 MCP（JSON-RPC 2.0，逐行）
   build.rs                 ui/dist 变了就重编
-  tests/itest.rs           走真实 HTTP 的集成测试（#[ignore]，dev/itest.sh 一条命令跑）
+  tests/itest.rs           走真实 HTTP 的集成测试（#[ignore]，dev/itest.sh 一条命令跑；测试服务器端口 BUNSEN_TEST_PORT，缺省 2222）
+  tests/r3.rs              真实入口测试：命令行参数错误脱敏、HTTP/WebSocket 的服务器参数解析
 ```
 
 ## 关键决定
@@ -57,6 +61,16 @@ crates/cli   (bunsen-cli，可执行文件 bunsen)
 17. **插件内嵌放在 core**（不是 cli）：部署逻辑在 core，三个入口共用；最终同样编进 `bunsen` 一个可执行文件。rust-embed 不保存权限位，内嵌文件按规则设可执行：`*.sh`、`tools/*.py`、`#!` 开头。本机目录插件保留原权限位。
 18. **插件下发**：本机先展开到 `<数据目录>/plugins-cache/<name>-<FNV64 内容哈希>/`（过滤后的副本，已存在则复用，同名旧版本删掉），再 rsync/tar 到服务器 `~/.bunsen/plugins/.<name>.tmp`，最后一次 ssh 依次 `mv` 换上（两次 rename，非严格原子）。`BUNSEN_SYNC_METHOD=tar` 强制走 tar（测试用）。
 
+### v1.3：本机执行与研究项目
+
+19. **本机是一台服务器，不是特例**：所有操作都拼成同一段 bash 脚本，由执行器决定交给 ssh 还是本机 `bash -s`。本机执行把命令放进独立进程组，超时或取消时先 TERM、等 3 秒再 KILL；远端由受监督的脚本做同样的事，取消用原子写的标记文件区分，正常退出码原样返回。
+20. **服务器参数的解析只有一个入口**：用户输入先按 id、再按别名找；保留 id `local` 只匹配本机记录，本机记录不存在或被 `BUNSEN_NO_LOCAL` 隐藏时 `not_found`，不按别名回退。持久化的引用（会话里的 server_id）只按 id。
+21. **镜像只读、视图在本机算**：每个项目一个裸镜像 `hubs/<id>.git`，只取 `research/*`、`sync/*`。视图用每分支一次 `ls-tree -r -l -z` 加一次 `cat-file --batch`，边读边筛，按路径数、单对象、合计字节设上限。被跳过的路径要精确去重计数，内存放不下时写成有序分段，最后一次 k 路归并。
+22. **跨进程锁**：serve、命令行、MCP 共用数据目录。JSON 读改写锁数据目录的 `.lock`，镜像操作锁 `hubs/<id>.lock`，都用标准库文件锁。同一进程里每个 Store 单独打开锁文件，否则 flock 会把它们当成同一个持锁者。
+23. **报错一律先摘要再脱敏**：git/ssh 报错去掉固定提示，取最后 3 行，遮 URL 里的用户信息（RFC 3986 userinfo），截到 300 字符。所有写进 message、warning、detail、fetch_error 的地方共用 `error.rs` 里的同一组函数，命令行参数解析错误也走这里。
+24. **git 子进程**：`GIT_TERMINAL_PROMPT=0`，`GIT_ALLOW_PROTOCOL=file:git:http:https:ssh`，标准输入为空（`cat-file --batch` 除外）。研究插件 `rk.py` 用同样的协议白名单。
+25. **研究插件里的合并交给 git 保护**（研究插件 0.5.0 的 `rk sync`）：在真实索引上合并，不用临时索引。真正合并前要求暂存区和 HEAD 一致，快进由 git 自己保留暂存内容。HEAD 移动后按仓库状态判断结果，不回滚。git 及其 hook 放在独立进程组，由监护进程经控制管道托管：rk 自己超时、超限、被信号或被 KILL 时都能清掉整组，并回滚登记过的半截合并。
+
 ## 任务拆解（实现顺序）
 
 1. 工作区骨架、错误/模型/工具函数、存储；
@@ -69,3 +83,4 @@ crates/cli   (bunsen-cli，可执行文件 bunsen)
 8. 集成测试（`dev/itest.sh`）；
 9. v1.1：raw、artifacts、研究记录增强、运行详情、GPU 进程、主机笔记、MCP 新工具；
 10. v1.2：插件内嵌与下发、Settings.plugin_paths、Agent.plugin_prompt、plugins 字段与兼容规则、CLI/MCP。
+11. v1.3：执行器与本机服务器、跨进程锁、研究项目（镜像、视图、部署接入、立即同步）、报错摘要与脱敏、CLI/MCP、两机端到端验证。

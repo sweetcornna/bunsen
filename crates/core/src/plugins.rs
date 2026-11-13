@@ -12,14 +12,19 @@ use std::path::{Path, PathBuf};
 struct Bundled;
 
 /// 不下发的目录名。
-const EXCLUDED_DIRS: &[&str] = &[".git", ".claude", "tests", "node_modules", "keys", "secrets"];
+const EXCLUDED_DIRS: &[&str] = &[".git", ".claude", "tests", "node_modules", "keys", "secrets", "__pycache__"];
 /// 本机目录插件的上限（防止误选一个巨大的目录）。
 const LOCAL_MAX_FILES: usize = 20_000;
 const LOCAL_MAX_BYTES: u64 = 200 * 1024 * 1024;
 
 /// 文件名是否不该下发：`id_*` `*.pem` `*.key` `lab.md` `.env*`。
 fn excluded_file(name: &str) -> bool {
-    name.starts_with("id_") || name.ends_with(".pem") || name.ends_with(".key") || name == "lab.md" || name.starts_with(".env")
+    name.starts_with("id_")
+        || name.ends_with(".pem")
+        || name.ends_with(".key")
+        || name.ends_with(".pyc")
+        || name == "lab.md"
+        || name.starts_with(".env")
 }
 
 /// 相对路径（`/` 分隔）里有没有要排除的目录段或文件名。
@@ -38,10 +43,7 @@ pub fn wants_exec(rel: &str, data: &[u8]) -> bool {
 }
 
 pub fn valid_name(n: &str) -> bool {
-    !n.is_empty()
-        && n.len() <= 64
-        && !n.starts_with('.')
-        && n.bytes().all(|b| b.is_ascii_alphanumeric() || b"._-".contains(&b))
+    !n.is_empty() && n.len() <= 64 && !n.starts_with('.') && n.bytes().all(|b| b.is_ascii_alphanumeric() || b"._-".contains(&b))
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -65,10 +67,8 @@ pub struct Available {
 }
 
 fn bundled_names() -> Vec<String> {
-    let mut v: Vec<String> = Bundled::iter()
-        .filter_map(|p| p.split_once('/').map(|(top, _)| top.to_string()))
-        .filter(|n| valid_name(n))
-        .collect();
+    let mut v: Vec<String> =
+        Bundled::iter().filter_map(|p| p.split_once('/').map(|(top, _)| top.to_string())).filter(|n| valid_name(n)).collect();
     v.sort();
     v.dedup();
     v
@@ -150,9 +150,8 @@ fn walk_local(base: &Path, rel: &str, out: &mut Vec<PluginFile>, total: &mut u64
 /// 由文件列表得出插件信息。
 pub fn describe(name: &str, src: &Source, files: &[PluginFile]) -> Plugin {
     let get = |rel: &str| files.iter().find(|f| f.rel == rel);
-    let manifest: serde_json::Value = get(".claude-plugin/plugin.json")
-        .and_then(|f| serde_json::from_slice(&f.data).ok())
-        .unwrap_or_default();
+    let manifest: serde_json::Value =
+        get(".claude-plugin/plugin.json").and_then(|f| serde_json::from_slice(&f.data).ok()).unwrap_or_default();
     let s = |k: &str| manifest.get(k).and_then(|v| v.as_str()).unwrap_or("").to_string();
     let mut skills: Vec<String> = files
         .iter()
@@ -311,6 +310,8 @@ mod tests {
             ".git/config",
             "a/.claude/settings.json",
             "tests/run.sh",
+            "tools/__pycache__/rk.cpython-315.pyc",
+            "nested/loose.pyc",
             "x/node_modules/y.js",
             "keys/id_x",
             "secrets/token.txt",

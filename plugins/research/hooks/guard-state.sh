@@ -20,13 +20,13 @@ case "$name" in TEMPLATE.md) exit 0 ;; *.md) ;; *) exit 0 ;; esac
 line=${name%.md}
 c="$home/.loop/leases/$line.json"
 if [ ! -f "$c" ]; then
-  echo "【research】已拦截：这台机器没有研究线 $line 的推进权，不能改 state/$line.md。要在这里推进先 python3 $home/tools/rk.py line take $line（别的机器持有时，请它用 rk handoff 交接过来）；新线用 rk line new。" >&2
+  echo "【research】已拦截：这台机器没有研究线 $line 的推进权，不能改 state/$line.md。要在这里推进先 python3 $home/tools/rk.py line take ${line}（别的机器持有时，请它用 rk handoff 交接过来）；新线用 rk line new。" >&2
   exit 2
 fi
 deadline=$(jq -r '.deadline // 0 | floor' "$c" 2>/dev/null)
 case "$deadline" in ''|*[!0-9]*) exit 0 ;; esac
 if [ "$deadline" -lt "$(date +%s)" ]; then
-  echo "【research】已拦截：本机记录的 $line 推进权已到期。先 python3 $home/tools/rk.py line beat 续租；被别的机器接管了会续不上，那就停下这条线，git pull 看现状。" >&2
+  echo "【research】已拦截：本机记录的 $line 推进权已到期。先 python3 $home/tools/rk.py line beat 续租；被别的机器接管了会续不上，那就停下这条线，python3 $home/tools/rk.py sync --pull 看现状。" >&2
   exit 2
 fi
 exit 0

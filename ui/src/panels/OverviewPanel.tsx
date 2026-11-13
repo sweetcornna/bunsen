@@ -1,8 +1,9 @@
 import { Copy, RefreshCw } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
+import { ProjectName } from "../components/ProjectName";
 import { Button, IconButton, Meter, Spinner } from "../components/ui";
 import { api, type Agent, type Gpu, type Server, type Session } from "../lib/api";
-import { copyText, fullTime, gb, gpuFree } from "../lib/format";
+import { copyText, fullTime, gb, gpuFree, isLocal, serverAddr } from "../lib/format";
 import { useApp } from "../lib/store";
 
 export function OverviewPanel({ session, server, agent, active }: { session: Session; server: Server | undefined; agent: Agent | undefined; active: boolean }) {
@@ -49,10 +50,20 @@ export function OverviewPanel({ session, server, agent, active }: { session: Ses
           <dt>服务器</dt>
           <dd>
             {session.server_alias}
-            {server && <span className="dim mono"> {server.user}@{server.host}{server.port !== 22 ? `:${server.port}` : ""}</span>}
+            {server && <span className={isLocal(server) ? "dim" : "dim mono"}> {serverAddr(server)}</span>}
           </dd>
           <dt>工作目录</dt>
           <dd className="mono">{session.workdir}</dd>
+          {session.project_id && (
+            <>
+              <dt>研究项目</dt>
+              <dd>
+                <ProjectName id={session.project_id} />
+              </dd>
+              <dt>机器代号</dt>
+              <dd>{session.machine ? <span className="mono">{session.machine}</span> : <span className="dim">还没有：仓库里有研究目录后执行 rk sync --setup</span>}</dd>
+            </>
+          )}
           <dt>tmux 会话</dt>
           <dd className="mono">{session.tmux}</dd>
           <dt>创建</dt>

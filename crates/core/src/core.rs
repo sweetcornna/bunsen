@@ -3,12 +3,13 @@
 
 use crate::agents;
 use crate::error::{Code, Error, Result};
+use crate::exec::{self, LOCAL_ID};
 use crate::import::{self, Kind, Upload};
 use crate::keys;
 use crate::model::*;
 use crate::probe;
 use crate::shell::{quote, PATH_PRELUDE, TMUX};
-use crate::ssh::{only_key_args, Ssh};
+use crate::ssh::{only_key_args, RemoteOutput, Ssh};
 use crate::sshconfig::{self, identity_basename, validate_alias, validate_single_line, validate_word};
 use crate::store::{Paths, Store};
 use crate::tmux;
@@ -31,6 +32,10 @@ pub fn target(sv: &Server) -> String {
     format!("op-{}", sv.id)
 }
 
+fn local_enabled() -> bool {
+    cfg!(unix) && !std::env::var("BUNSEN_NO_LOCAL").is_ok_and(|v| v == "1")
+}
+
 impl Core {
     /// 按环境变量（`BUNSEN_DATA_DIR`、`BUNSEN_CM_DIR`）打开数据目录。
     pub fn open() -> Result<Arc<Core>> {
@@ -41,8 +46,68 @@ impl Core {
         let ssh = Ssh::new(paths.ssh_config());
         let store = Store::open(paths)?;
         let core = Core { store, ssh };
+        core.ensure_local_server()?;
         core.regen_ssh_config()?;
         Ok(Arc::new(core))
+    }
+
+    /// 本机作为一台“服务器”：脚本直接交给本机的 bash。只在类 Unix 系统上有（Windows 没有现成的 bash 与 tmux）。
+    /// 已有同名别名的服务器时，本机的别名依次退为 `local2`、`local3`，不改用户的记录。
+    fn ensure_local_server(&self) -> Result<()> {
+        if !local_enabled() {
+            return Ok(());
+        }
+        let user = std::env::var("USER").unwrap_or_else(|_| "me".into());
+        self.store.update_servers(|v| {
+            if v.iter().any(|s| s.id == LOCAL_ID) {
+                return Ok(());
+            }
+            let mut alias = "local".to_string();
+            let mut n = 2;
+            while v.iter().any(|s| s.alias == alias) {
+                alias = format!("local{n}");
+                n += 1;
+            }
+            v.insert(
+                0,
+                Server {
+                    id: LOCAL_ID.into(),
+                    alias,
+                    host: "localhost".into(),
+                    user: user.clone(),
+                    port: 22,
+                    key: None,
+                    proxy_jump: None,
+                    proxy_command: None,
+                    source: ServerSource::Local,
+                    note: "本机：会话跑在这台电脑的 tmux 里，不经 ssh".into(),
+                    default_workdir: "~".into(),
+                    status: ServerStatus::Unknown,
+                    status_detail: None,
+                    last_checked: None,
+                    probe: None,
+                },
+            );
+            Ok(())
+        })
+    }
+
+    /// 在一台服务器上执行脚本：远程走 ssh，本机直接交给 bash。
+    pub async fn exec(&self, sv: &Server, body: &str, timeout: Duration) -> Result<RemoteOutput> {
+        if sv.is_local() && !local_enabled() {
+            return Err(Error::not_found("本机服务器已禁用"));
+        }
+        if sv.is_local() {
+            exec::run_local(body, timeout).await
+        } else {
+            self.ssh.run_named(&target(sv), &sv.alias, body, timeout, &[]).await
+        }
+    }
+
+    async fn close_master(&self, sv: &Server) {
+        if !sv.is_local() {
+            self.ssh.close_master(&target(sv)).await;
+        }
     }
 
     pub fn paths(&self) -> &Paths {
@@ -91,10 +156,7 @@ impl Core {
     }
 
     pub fn agent(&self, id: &str) -> Result<Agent> {
-        self.agents()?
-            .into_iter()
-            .find(|a| a.id == id)
-            .ok_or_else(|| Error::not_found(format!("没有 id 为 {id} 的 Agent")))
+        self.agents()?.into_iter().find(|a| a.id == id).ok_or_else(|| Error::not_found(format!("没有 id 为 {id} 的 Agent")))
     }
 
     pub fn put_agent(&self, id: &str, a: Agent) -> Result<Agent> {
@@ -126,17 +188,27 @@ impl Core {
     // ---------- 服务器 ----------
 
     pub fn servers(&self) -> Result<Vec<Server>> {
-        self.store.servers()
+        Ok(self.store.servers()?.into_iter().filter(|s| !s.is_local() || local_enabled()).collect())
     }
 
-    /// 按 id 或别名找服务器。
+    /// G24：用户输入唯一解析入口，先 id 后别名；保留 id local 永不回退到远程。
     pub fn server(&self, key: &str) -> Result<Server> {
         let v = self.store.servers()?;
-        v.iter()
-            .find(|s| s.id == key)
-            .or_else(|| v.iter().find(|s| s.alias == key))
-            .cloned()
-            .ok_or_else(|| Error::not_found(format!("没有找到服务器 {key}")))
+        let found = if key == crate::exec::LOCAL_ID {
+            v.iter().find(|s| s.id == key && s.is_local())
+        } else {
+            v.iter().find(|s| s.id == key).or_else(|| v.iter().find(|s| s.alias == key))
+        };
+        found.filter(|s| !s.is_local() || local_enabled()).cloned().ok_or_else(|| Error::not_found(format!("没有找到服务器 {key}")))
+    }
+
+    /// 持久化引用不能当别名重新解释，否则被删除的 id 可能指向另一台机器。
+    pub fn server_by_id(&self, id: &str) -> Result<Server> {
+        self.store
+            .servers()?
+            .into_iter()
+            .find(|s| s.id == id && (!s.is_local() || local_enabled()))
+            .ok_or_else(|| Error::not_found(format!("没有找到服务器 {id}")))
     }
 
     fn check_key_exists(&self, key: &Option<String>) -> Result<()> {
@@ -235,10 +307,13 @@ impl Core {
         if let Some(w) = p.default_workdir {
             next.default_workdir = norm_opt(Some(w)).unwrap_or_else(|| "~".into());
         }
-        Self::check_server_fields(&next.alias, &next.host, &next.user, &next.proxy_jump, &next.proxy_command)?;
-        self.check_key_exists(&next.key)?;
         let conn_changed = (&cur.host, &cur.user, cur.port, &cur.key, &cur.proxy_jump, &cur.proxy_command)
             != (&next.host, &next.user, next.port, &next.key, &next.proxy_jump, &next.proxy_command);
+        if cur.is_local() && conn_changed {
+            return Err(Error::bad_request("本机没有连接参数可改").with_hint("本机只能改别名、备注和默认工作目录"));
+        }
+        Self::check_server_fields(&next.alias, &next.host, &next.user, &next.proxy_jump, &next.proxy_command)?;
+        self.check_key_exists(&next.key)?;
         if conn_changed {
             next.status = ServerStatus::Unknown;
             next.status_detail = None;
@@ -263,13 +338,18 @@ impl Core {
         self.regen_ssh_config()?;
         if conn_changed {
             // 旧的 ControlMaster 还按旧参数连着，关掉它。
-            self.ssh.close_master(&target(&cur)).await;
+            self.close_master(&cur).await;
         }
         Ok(next)
     }
 
     pub async fn delete_server(&self, key: &str) -> Result<()> {
         let sv = self.server(key)?;
+        if sv.is_local() {
+            return Err(
+                Error::bad_request("本机不能删除").with_hint("不想在本机跑会话就不选它；设环境变量 BUNSEN_NO_LOCAL=1 启动可以不显示本机")
+            );
+        }
         let live: Vec<String> = self
             .store
             .sessions()?
@@ -281,7 +361,7 @@ impl Core {
             return Err(Error::conflict(format!("服务器 {} 上还有 {} 个未归档的会话", sv.alias, live.len()))
                 .with_hint("先停止并删除或归档这些会话"));
         }
-        self.ssh.close_master(&target(&sv)).await;
+        self.close_master(&sv).await;
         self.store.update_servers(|v| {
             v.retain(|s| s.id != sv.id);
             Ok(())
@@ -319,8 +399,12 @@ impl Core {
     }
 
     async fn try_connect(&self, sv: &Server, key: Option<&str>) -> Result<Duration> {
-        let extra = key.map(|k| only_key_args(&self.paths().keys_dir().join(k))).unwrap_or_default();
-        let out = self.ssh.run_with(&target(sv), "echo __OP_OK__", TEST_TIMEOUT, &extra).await?;
+        let out = if sv.is_local() {
+            self.exec(sv, "echo __OP_OK__", TEST_TIMEOUT).await?
+        } else {
+            let extra = key.map(|k| only_key_args(&self.paths().keys_dir().join(k))).unwrap_or_default();
+            self.ssh.run_named(&target(sv), &sv.alias, "echo __OP_OK__", TEST_TIMEOUT, &extra).await?
+        };
         if out.text().contains("__OP_OK__") {
             Ok(out.elapsed)
         } else {
@@ -335,6 +419,7 @@ impl Core {
         let saved_keys = keys::list_names(&self.paths().keys_dir())?;
         // 尝试顺序：None 表示“按当前配置”。
         let mut attempts: Vec<Option<String>> = Vec::new();
+        let try_all_keys = try_all_keys && !sv.is_local();
         if sv.key.is_some() || !try_all_keys {
             attempts.push(None);
         }
@@ -386,7 +471,7 @@ impl Core {
         let sv = self.server(key)?;
         let agents = self.agents()?;
         let script = probe::probe_script(&agents);
-        let out = match self.ssh.run(&target(&sv), &script, Duration::from_secs(60)).await {
+        let out = match self.exec(&sv, &script, Duration::from_secs(60)).await {
             Ok(o) => o,
             Err(e) => {
                 let _ = self.record_conn(&sv.id, &Err(e.clone()));
@@ -405,7 +490,7 @@ impl Core {
             "mkdir -p \"$HOME/.bunsen\" || exit 0\nif [ ! -e \"$HOME/.bunsen/HOST.md\" ]; then printf '%s' {} > \"$HOME/.bunsen/.HOST.md.tmp\" && mv \"$HOME/.bunsen/.HOST.md.tmp\" \"$HOME/.bunsen/HOST.md\"; fi\n",
             quote(&draft)
         );
-        let _ = self.ssh.run(&target(&sv), &script, OP_TIMEOUT).await;
+        let _ = self.exec(&sv, &script, OP_TIMEOUT).await;
         self.set_status(&sv.id, |s| s.probe = Some(p))
     }
 
@@ -414,7 +499,7 @@ impl Core {
     pub async fn host_notes(&self, key: &str) -> Result<HostNotes> {
         let sv = self.server(key)?;
         let script = "if [ -f \"$HOME/.bunsen/HOST.md\" ]; then echo __OP_YES__; head -c 262144 \"$HOME/.bunsen/HOST.md\"; else echo __OP_NO__; fi\n";
-        let out = self.ssh.run(&target(&sv), script, OP_TIMEOUT).await?;
+        let out = self.exec(&sv, script, OP_TIMEOUT).await?;
         let raw = String::from_utf8_lossy(&out.stdout).into_owned();
         if let Some(text) = raw.strip_prefix("__OP_YES__\n") {
             return Ok(HostNotes { text: text.to_string(), exists: true });
@@ -434,7 +519,7 @@ impl Core {
             "mkdir -p \"$HOME/.bunsen\" && printf '%s' {} > \"$HOME/.bunsen/.HOST.md.tmp\" && mv \"$HOME/.bunsen/.HOST.md.tmp\" \"$HOME/.bunsen/HOST.md\" && echo __OP_DONE__\n",
             quote(text)
         );
-        let out = self.ssh.run(&target(&sv), &script, OP_TIMEOUT).await?;
+        let out = self.exec(&sv, &script, OP_TIMEOUT).await?;
         if !out.text().contains("__OP_DONE__") {
             return Err(Error::new(Code::SshFailed, format!("写入主机笔记失败：{}", out.err_line())));
         }
@@ -443,7 +528,7 @@ impl Core {
 
     pub async fn gpus(&self, key: &str) -> Result<Vec<Gpu>> {
         let sv = self.server(key)?;
-        let out = self.ssh.run(&target(&sv), &probe::gpu_script(), Duration::from_secs(30)).await?;
+        let out = self.exec(&sv, &probe::gpu_script(), Duration::from_secs(30)).await?;
         Ok(probe::parse_gpus(&out.text()))
     }
 
@@ -455,10 +540,7 @@ impl Core {
             return Err(Error::bad_request(format!("{} 不需要安装", agent.name)));
         }
         let m = method.unwrap_or(0);
-        let inst = agent
-            .install
-            .get(m)
-            .ok_or_else(|| Error::bad_request(format!("{} 没有第 {} 种安装方式", agent.name, m)))?;
+        let inst = agent.install.get(m).ok_or_else(|| Error::bad_request(format!("{} 没有第 {} 种安装方式", agent.name, m)))?;
         let name = tmux::install_session(&agent.id);
         // 安装结束后留一个 shell（可以接着登录代理）。不让窗格直接死掉：
         // tmux 把 “Pane is dead” 写在最底行，客户端窗口比 50 行小时前面的输出会被推进历史里，看起来一片空白。
@@ -478,7 +560,7 @@ impl Core {
             s = quote(&name),
             cmd = quote(&pane_cmd),
         );
-        let out = self.ssh.run(&target(&sv), &script, OP_TIMEOUT).await?;
+        let out = self.exec(&sv, &script, OP_TIMEOUT).await?;
         if out.text().contains("__OP_NO_TMUX__") {
             return Err(tmux_missing());
         }
@@ -526,11 +608,8 @@ impl Core {
             }
         }
         // 3. 配置
-        let mut texts: Vec<String> = items
-            .iter()
-            .filter(|(_, k)| *k == Kind::Config)
-            .map(|(u, _)| String::from_utf8_lossy(&u.data).into_owned())
-            .collect();
+        let mut texts: Vec<String> =
+            items.iter().filter(|(_, k)| *k == Kind::Config).map(|(u, _)| String::from_utf8_lossy(&u.data).into_owned()).collect();
         if let Some(t) = config_text.filter(|t| !t.trim().is_empty()) {
             if sshconfig::looks_like_config(&t) {
                 texts.push(t);
@@ -579,6 +658,10 @@ impl Core {
                 }
                 if key.is_none() && !missing.is_empty() {
                     warnings.push(format!("Host {} 引用的密钥 {} 没有上传", e.alias, missing.join("、")));
+                }
+                if servers.iter().any(|s| s.alias == e.alias && s.is_local()) {
+                    warnings.push(format!("Host {} 与本机的别名相同，已跳过（先把本机改个别名再导入）", e.alias));
+                    continue;
                 }
                 match servers.iter_mut().find(|s| s.alias == e.alias) {
                     Some(s) => {
@@ -638,7 +721,7 @@ impl Core {
             let core = Arc::clone(self);
             let id = id.clone();
             set.spawn(async move {
-                let sv = core.server(&id)?;
+                let sv = core.server_by_id(&id)?;
                 let r = core.test_server(&id, sv.key.is_none()).await?;
                 Ok::<_, Error>((id, r))
             });
@@ -665,6 +748,7 @@ impl Core {
         res.servers_added = servers.iter().filter(|s| added_ids.contains(&s.id)).cloned().collect();
         res.servers_updated = servers.iter().filter(|s| updated_ids.contains(&s.id)).cloned().collect();
         res.keys_added = added_keys.iter().map(|n| keys::info(&keys_dir, n, &servers)).collect();
+        res.warnings = res.warnings.into_iter().map(|s| crate::error::redact(&s)).collect();
         Ok(res)
     }
 }

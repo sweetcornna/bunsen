@@ -43,7 +43,7 @@ pub fn quote_path(p: &str) -> String {
 
 /// 远程命令统一的 PATH 前导（单行，可嵌进 `bash -lc '…'`）。
 pub const PATH_PRELUDE: &str = concat!(
-    "export PATH=\"$HOME/.local/bin:$HOME/bin:$HOME/.npm-global/bin:$HOME/.bun/bin:$HOME/.cargo/bin:$HOME/.opencode/bin:/usr/local/bin:$PATH\"; ",
+    "export PATH=\"$HOME/.local/bin:$HOME/bin:$HOME/.npm-global/bin:$HOME/.bun/bin:$HOME/.cargo/bin:$HOME/.opencode/bin:/opt/homebrew/bin:/usr/local/bin:$PATH\"; ",
     "for __op_d in \"$HOME\"/.nvm/versions/node/*/bin; do if [ -d \"$__op_d\" ]; then PATH=\"$__op_d:$PATH\"; fi; done; ",
     "if [ -f \"$HOME/.bunsen/env.sh\" ]; then . \"$HOME/.bunsen/env.sh\"; fi"
 );
@@ -53,7 +53,7 @@ pub const TMUX: &str = "tmux -L bunsen -f \"$HOME/.bunsen/tmux.conf\"";
 
 /// 把脚本包成 `{ 前导; 脚本 } </dev/null`，送进 `bash -s`。
 pub fn wrap_script(body: &str) -> String {
-    format!("{{\n{PATH_PRELUDE}\n{body}\n}} </dev/null\n")
+    format!("{{\n{PATH_PRELUDE}\nexport GIT_TERMINAL_PROMPT=0 GIT_ALLOW_PROTOCOL=file:git:http:https:ssh GIT_LITERAL_PATHSPECS=1\n{body}\n}} </dev/null\n")
 }
 
 /// 插件在服务器上的目录（`~` 开头，交给 quote_path）。

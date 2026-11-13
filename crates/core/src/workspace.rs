@@ -1,7 +1,7 @@
 //! 工作区：文件浏览、读文件、git 状态与差异、科研面板。路径相对会话的 workdir，也接受绝对路径和 `~`。
 
-use crate::core::{target, Core, OP_TIMEOUT};
-use crate::error::{Code, Error, Result};
+use crate::core::{Core, OP_TIMEOUT};
+use crate::error::{git_error_summary, Code, Error, Result};
 use crate::model::*;
 use crate::shell::{quote, quote_path};
 use crate::util::{rfc3339_from_unix, short_id};
@@ -130,7 +130,7 @@ impl Core {
             .into_iter()
             .find(|r| r.session.id == id)
             .ok_or_else(|| Error::not_found(format!("没有 id 为 {id} 的会话")))?;
-        let sv = self.server(&rec.session.server_id)?;
+        let sv = self.server_by_id(&rec.session.server_id)?;
         Ok((rec.session, sv))
     }
 
@@ -145,7 +145,7 @@ impl Core {
             p = quote_path(p),
             py = quote(LIST_PY),
         );
-        let out = self.ssh.run(&target(&sv), &script, OP_TIMEOUT).await?;
+        let out = self.exec(&sv, &script, OP_TIMEOUT).await?;
         let text = out.text();
         if text.contains("__OP_NOWD__") {
             return Err(nowd(&s.workdir));
@@ -161,9 +161,7 @@ impl Core {
         let entries = if let Some((_, body)) = text.split_once("__OP_PY__\n") {
             let rows: Vec<(String, String, u64, i64)> = serde_json::from_str(body.trim())
                 .map_err(|e| Error::new(Code::SshFailed, format!("列目录输出无法解析：{e}；{}", out.err_line())))?;
-            rows.into_iter()
-                .map(|(name, kind, size, mtime)| FileEntry { name, kind, size, mtime: rfc3339_from_unix(mtime) })
-                .collect()
+            rows.into_iter().map(|(name, kind, size, mtime)| FileEntry { name, kind, size, mtime: rfc3339_from_unix(mtime) }).collect()
         } else if let Some((_, body)) = text.split_once("__OP_STAT__\n") {
             parse_stat_lines(body)
         } else {
@@ -197,7 +195,7 @@ impl Core {
             p = quote_path(path),
         );
         let timeout = if limit > MAX_TEXT * 2 { std::time::Duration::from_secs(300) } else { OP_TIMEOUT };
-        let out = self.ssh.run(&target(&sv), &script, timeout).await?;
+        let out = self.exec(&sv, &script, timeout).await?;
         let raw = &out.stdout;
         let marker = b"__OP_FILE__\t";
         let Some(pos) = raw.windows(marker.len()).position(|w| w == marker) else {
@@ -252,7 +250,7 @@ impl Core {
              git status --porcelain=v1 -z --untracked-files=normal -- . 2>/dev/null | head -c 2000000\n",
             cd = cd_workdir(&s.workdir),
         );
-        let out = self.ssh.run(&target(&sv), &script, OP_TIMEOUT).await?;
+        let out = self.exec(&sv, &script, OP_TIMEOUT).await?;
         let raw = &out.stdout;
         let marker = b"__OP_BRANCH__\t";
         let Some(pos) = raw.windows(marker.len()).position(|w| w == marker) else {
@@ -260,7 +258,7 @@ impl Core {
             if t.contains("__OP_NOREPO__") || t.contains("__OP_NOWD__") {
                 return Ok(GitStatus { is_repo: false, branch: None, changes: vec![] });
             }
-            return Err(Error::new(Code::SshFailed, format!("读取 git 状态失败：{}", out.err_line())));
+            return Err(Error::new(Code::SshFailed, format!("读取 git 状态失败：{}", git_error_summary(&out.stderr))));
         };
         let rest = &raw[pos + marker.len()..];
         let nl = rest.iter().position(|&b| b == b'\n').unwrap_or(rest.len());
@@ -291,7 +289,7 @@ impl Core {
             cd = cd_workdir(&s.workdir),
             lim = MAX_TEXT + 4,
         );
-        let out = self.ssh.run(&target(&sv), &script, OP_TIMEOUT).await?;
+        let out = self.exec(&sv, &script, OP_TIMEOUT).await?;
         let text = out.text();
         if text.contains("__OP_NOWD__") {
             return Err(nowd(&s.workdir));
@@ -300,7 +298,7 @@ impl Core {
             return Err(Error::bad_request("工作目录不是 git 仓库"));
         }
         let Some((_, body)) = text.split_once("__OP_DIFF__\n") else {
-            return Err(Error::new(Code::SshFailed, format!("读取差异失败：{}", out.err_line())));
+            return Err(Error::new(Code::SshFailed, format!("读取差异失败：{}", git_error_summary(&out.stderr))));
         };
         Ok(GitDiff { diff: cut_utf8(body, MAX_TEXT).to_string() })
     }
@@ -341,14 +339,16 @@ impl Core {
             cd = cd_workdir(&s.workdir),
             home = RESOLVE_HOME,
         );
-        let out = self.ssh.run(&target(&sv), &script, OP_TIMEOUT).await?;
+        let out = self.exec(&sv, &script, OP_TIMEOUT).await?;
         Ok(parse_research(&out.text(), &m))
     }
 
     /// 一次运行的详情（v1.1）。`run_id` 只接受 `[A-Za-z0-9._-]{1,64}`（且不能全是点）。
     pub async fn research_run(&self, id: &str, run_id: &str, lines: Option<u32>) -> Result<RunDetail> {
         if !valid_run_id(run_id) {
-            return Err(Error::bad_request(format!("run_id“{run_id}”不合法")).with_hint("只能包含字母、数字、点、下划线和连字符，最长 64 个字符"));
+            return Err(
+                Error::bad_request(format!("run_id“{run_id}”不合法")).with_hint("只能包含字母、数字、点、下划线和连字符，最长 64 个字符")
+            );
         }
         let n = lines.unwrap_or(200).clamp(1, 2000);
         let (s, sv) = self.ws_ctx(id).await?;
@@ -367,7 +367,7 @@ impl Core {
             home = RESOLVE_HOME,
             rid = quote(run_id),
         );
-        let out = self.ssh.run(&target(&sv), &script, OP_TIMEOUT).await?;
+        let out = self.exec(&sv, &script, OP_TIMEOUT).await?;
         let text = out.text();
         if text.contains("__OP_NOWD__") {
             return Err(nowd(&s.workdir));
@@ -380,9 +380,8 @@ impl Core {
         let meta_text = get("meta").ok_or_else(|| Error::new(Code::SshFailed, format!("读取运行记录失败：{}", out.err_line())))?;
         let meta: serde_json::Value = serde_json::from_str(meta_text.trim())
             .map_err(|e| Error::bad_request(format!("runs/{run_id}/meta.json 不是合法 JSON：{e}")))?;
-        let metrics = get("metrics")
-            .filter(|t| t.len() <= 64 * 1024)
-            .and_then(|t| serde_json::from_str::<serde_json::Value>(t.trim()).ok());
+        let metrics =
+            get("metrics").filter(|t| t.len() <= 64 * 1024).and_then(|t| serde_json::from_str::<serde_json::Value>(t.trim()).ok());
         Ok(RunDetail { run_id: run_id.to_string(), meta, log_tail: get("log").unwrap_or_default(), metrics, result_md: get("result") })
     }
 
@@ -403,7 +402,7 @@ impl Core {
             expr = find_expr(),
             cap = ART_SCAN_CAP,
         );
-        let out = self.ssh.run(&target(&sv), &script, std::time::Duration::from_secs(90)).await?;
+        let out = self.exec(&sv, &script, std::time::Duration::from_secs(90)).await?;
         let text = out.text();
         if text.contains("__OP_NOWD__") {
             return Err(nowd(&s.workdir));
@@ -422,10 +421,7 @@ if [ -f .claude/research-home ]; then r=$(head -n 1 .claude/research-home | tr -
 case \"$rel\" in /*) h=$rel ;; *) h=\"$PWD/$rel\" ;; esac\n";
 
 pub fn valid_run_id(r: &str) -> bool {
-    !r.is_empty()
-        && r.len() <= 64
-        && r.bytes().all(|b| b.is_ascii_alphanumeric() || b"._-".contains(&b))
-        && !r.bytes().all(|b| b == b'.')
+    !r.is_empty() && r.len() <= 64 && r.bytes().all(|b| b.is_ascii_alphanumeric() || b"._-".contains(&b)) && !r.bytes().all(|b| b == b'.')
 }
 
 /// 远程脚本里“能不能用 python3”的判断。`BUNSEN_REMOTE_NO_PYTHON=1` 强制走 find/stat 退路（测试与排障用）。
@@ -452,12 +448,9 @@ const DOC_DIRS: &[&str] = &["results", "reports", "report", "paper", "papers", "
 
 /// `find` 的表达式（BusyBox 也支持的选项）：跳过目录、只要候选扩展名的普通文件。
 fn find_expr() -> String {
-    let skip: Vec<String> = std::iter::once("-name '.*'".to_string())
-        .chain(ART_SKIP_DIRS.iter().map(|d| format!("-name {d}")))
-        .collect();
+    let skip: Vec<String> = std::iter::once("-name '.*'".to_string()).chain(ART_SKIP_DIRS.iter().map(|d| format!("-name {d}"))).collect();
     let exts: Vec<String> = ART_KINDS.iter().flat_map(|(_, e)| e.iter()).map(|e| format!("-iname '*.{e}'")).collect();
-    format!("\\( -type d \\( {} \\) -prune \\) -o \\( -type f \\( {} \\)", skip.join(" -o "), exts.join(" -o "))
-        + " \\)"
+    format!("\\( -type d \\( {} \\) -prune \\) -o \\( -type f \\( {} \\)", skip.join(" -o "), exts.join(" -o ")) + " \\)"
 }
 
 const ARTIFACT_PY: &str = r#"import os
@@ -652,9 +645,7 @@ pub fn parse_research(text: &str, m: &str) -> ResearchPanel {
                 .get("prereg")
                 .and_then(|v| v.as_array())
                 .map(|a| {
-                    a.iter()
-                        .filter_map(|x| x.get("path").and_then(|p| p.as_str()).or_else(|| x.as_str()).map(str::to_string))
-                        .collect()
+                    a.iter().filter_map(|x| x.get("path").and_then(|p| p.as_str()).or_else(|| x.as_str()).map(str::to_string)).collect()
                 })
                 .unwrap_or_default();
             run.commit = opt_s(meta, "git_commit");
@@ -836,7 +827,17 @@ mod tests {
         for d in ["figs", "results", ".hidden", "node_modules/x", "a/b/c/d/e/f/g/h/i"] {
             std::fs::create_dir_all(dir.join(d)).unwrap();
         }
-        for f in ["figs/loss.png", "figs/Plot.SVG", "results/r1.md", ".hidden/x.png", "node_modules/x/y.png", "README.md", "t.csv", "a/b/c/d/e/f/g/deep.png", "a/b/c/d/e/f/g/h/i/too-deep.png"] {
+        for f in [
+            "figs/loss.png",
+            "figs/Plot.SVG",
+            "results/r1.md",
+            ".hidden/x.png",
+            "node_modules/x/y.png",
+            "README.md",
+            "t.csv",
+            "a/b/c/d/e/f/g/deep.png",
+            "a/b/c/d/e/f/g/h/i/too-deep.png",
+        ] {
             std::fs::write(dir.join(f), "x").unwrap();
         }
         let run = |script: String| {
@@ -898,5 +899,4 @@ mod tests {
         let v = parse_sections("junk\n__M__ a\nx\n\n__M__ b\n__M__ end\n", "__M__");
         assert_eq!(v, [("a".to_string(), "x\n".to_string()), ("b".to_string(), String::new()), ("end".to_string(), String::new())]);
     }
-
 }

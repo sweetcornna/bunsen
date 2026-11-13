@@ -1,11 +1,13 @@
 import { PanelLeftOpen, Plus } from "lucide-react";
 import { useEffect, useState } from "react";
+import { ErrorBoundary } from "./components/ErrorBoundary";
 import { Palette } from "./components/Palette";
 import { Sidebar } from "./components/Sidebar";
 import { Button, cx, IconButton, Logo, Spinner, Toasts, Tooltip } from "./components/ui";
 import { loadLocal, saveLocal } from "./lib/format";
 import { go, useRoute } from "./lib/route";
 import { useApp } from "./lib/store";
+import { ProjectPage, Projects } from "./pages/Projects";
 import { Servers } from "./pages/Servers";
 import { SessionView } from "./pages/SessionView";
 import { Settings } from "./pages/Settings";
@@ -52,6 +54,21 @@ export function App() {
       document.removeEventListener("visibilitychange", onShow);
     };
   }, [boot, interval]);
+
+  // 项目列表上次没取到：窗口重新获得焦点、标签页切回来时再取一次（第一次失败后的几次自动重试在 store 里）。
+  useEffect(() => {
+    if (boot !== "ready") return;
+    const retry = () => {
+      const st = useApp.getState();
+      if (!document.hidden && st.projectsError) void st.loadProjects();
+    };
+    window.addEventListener("focus", retry);
+    document.addEventListener("visibilitychange", retry);
+    return () => {
+      window.removeEventListener("focus", retry);
+      document.removeEventListener("visibilitychange", retry);
+    };
+  }, [boot]);
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -116,10 +133,15 @@ export function App() {
             </div>
           )}
           <div className="main-body">
-            {route.name === "new" && <Welcome />}
-            {route.name === "session" && <SessionView key={route.id} id={route.id} />}
-            {route.name === "servers" && <Servers />}
-            {route.name === "settings" && <Settings />}
+            {/* 一页出错只换掉这一页，侧栏还在；换页（key 变了）就重新渲染 */}
+            <ErrorBoundary page key={route.name === "session" || route.name === "project" ? `${route.name}:${route.id}` : route.name}>
+              {route.name === "new" && <Welcome />}
+              {route.name === "session" && <SessionView key={route.id} id={route.id} />}
+              {route.name === "projects" && <Projects />}
+              {route.name === "project" && <ProjectPage key={route.id} id={route.id} />}
+              {route.name === "servers" && <Servers />}
+              {route.name === "settings" && <Settings />}
+            </ErrorBoundary>
           </div>
         </main>
       </div>

@@ -37,11 +37,13 @@ $ARGUMENTS
 bash "${CLAUDE_PLUGIN_ROOT}/scripts/scaffold.sh" "<项目目录>"
 ```
 
+- 脚手架只补缺失文档；已有项目的研究工具按版本升级，不覆盖已有文档、不降级工具，并自动读取 `.claude/research-home`；升级前备份工具，有未提交工具修改或越界链接时先处理，不强行覆盖。
 - 项目不是 git 仓库时先 `git init`：预登记靠提交来证明时间先后。
 - 创建或切换到开发分支，填好 `PROJECT.md`，提交。
 - 下文的 `rk` 指 `python3 research/tools/rk.py`。
 - 按要回答的问题划分研究线（先一条也行，以后再加），每条执行 `rk line new <线> --question "<要回答的问题>"`：它建 `state/<线>.md`，取得这条线的推进权，生成总览 `STATE.md` 并提交。线名用短的英文或拼音，例如 `baseline`、`ablation`。
 - 用共享算力、或以后可能换机器推进时，配好协调主机：`rk line config --collab "ssh <协调主机别名> python3 <共享目录>/collab.py"`。没有协调主机时推进权只登记在本机，单机够用。
+- 项目会在几台机器上推进时，设好汇合点（几台机器都能推送的 git 远程，默认 `origin`）：`rk sync --setup --branch research/<简称>`。之后每台机器只写自己的 `sync/<代号>` 分支，`rk run`、`rk done`、审计登记、研究线变更之后会在后台提交研究记录并汇合到研究分支；随时可以手工 `rk sync`。Bunsen 部署时会替你做这一步。
 
 ## 4. 打开循环
 

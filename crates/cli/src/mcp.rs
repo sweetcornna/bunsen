@@ -38,7 +38,8 @@ pub fn tools() -> Value {
                 "yolo": { "type": "boolean", "description": "跳过权限确认" },
                 "plugins": { "type": "array", "items": { "type": "string" }, "description": "要下发的插件；省略 = 全部可用插件，[] = 不带" },
                 "plugin": { "type": ["string", "null"], "description": "旧字段，等价 plugins:[plugin]" },
-                "extra_args": { "type": "string" }
+                "extra_args": { "type": "string" },
+                "project_id": { "type": "string", "description": "接入的研究项目 id" }
              }), &["server_id", "agent_id", "workdir"]),
         tool("session_send", "把文字粘贴进代理窗格，可选回车（POST /api/sessions/:id/send）",
              json!({ "session_id": sess, "text": { "type": "string" }, "enter": { "type": "boolean", "default": true } }), &["session_id", "text"]),
@@ -54,6 +55,11 @@ pub fn tools() -> Value {
              json!({ "server_id": sid }), &["server_id"]),
         tool("host_notes_set", "整体覆盖服务器上的主机笔记 ~/.bunsen/HOST.md（PUT /api/servers/:id/notes）。只记验证过的事实",
              json!({ "server_id": sid, "text": { "type": "string" } }), &["server_id", "text"]),
+        tool("list_projects", "列出研究项目（GET /api/projects）", json!({}), &[]),
+        tool("project_view", "查看研究项目的汇合视图（GET /api/projects/:id/view）",
+             json!({ "project": { "type": "string", "description": "项目 id 或名称" }, "refresh": { "type": "boolean" } }), &["project"]),
+        tool("project_sync", "同步所有成员会话并刷新汇合视图（POST /api/projects/:id/sync）",
+             json!({ "project": { "type": "string", "description": "项目 id 或名称" } }), &["project"]),
         tool("plugin_list", "列出部署时可下发的插件（GET /api/plugins）", json!({}), &[]),
     ])
 }
@@ -117,6 +123,9 @@ async fn simple_tool(core: &Arc<Core>, name: &str, a: &Value) -> Result<Value, E
         }
         "host_notes_get" => json!(core.host_notes(&arg_str(a, "server_id")?).await?),
         "host_notes_set" => json!(core.set_host_notes(&arg_str(a, "server_id")?, &arg_str(a, "text")?).await?),
+        "list_projects" => json!(core.projects()?),
+        "project_view" => json!(core.project_view(&arg_str(a, "project")?, a.get("refresh").and_then(Value::as_bool).unwrap_or(false)).await?),
+        "project_sync" => json!(core.sync_project(&arg_str(a, "project")?).await?),
         "plugin_list" => json!(core.plugins()?),
         other => return Err(Error::not_found(format!("没有这个工具：{other}"))),
     })
@@ -236,8 +245,42 @@ mod tests {
                 "research_show",
                 "host_notes_get",
                 "host_notes_set",
+                "list_projects",
+                "project_view",
+                "project_sync",
                 "plugin_list"
             ]
         );
     }
+    #[tokio::test]
+    async fn project_tools_schema_and_dispatch() {
+        let t = tools();
+        let deploy = t.as_array().unwrap().iter().find(|t| t["name"] == "session_deploy").unwrap();
+        assert_eq!(deploy["inputSchema"]["properties"]["project_id"]["type"], "string");
+        assert!(!deploy["inputSchema"]["required"].as_array().unwrap().contains(&json!("project_id")));
+        let root = std::env::temp_dir().join(format!("bunsen-mcp-project-{}", bunsen_core::util::short_id()));
+        let core = Core::open_at(bunsen_core::store::Paths { data: root.join("data"), cm_dir: root.join("cm") }).unwrap();
+        assert_eq!(call_tool(&core, "list_projects", &json!({})).await.unwrap(), json!([]));
+        assert_eq!(call_tool(&core, "project_view", &json!({})).await.unwrap_err().0.code, bunsen_core::Code::BadRequest);
+        assert_eq!(call_tool(&core, "project_sync", &json!({"project":"missing"})).await.unwrap_err().0.code, bunsen_core::Code::NotFound);
+        let hub = root.join("hub.git");
+        let status = tokio::time::timeout(std::time::Duration::from_secs(120), tokio::process::Command::new("git").args(["init", "--bare", "-q", "--"]).arg(&hub)
+            .env("GIT_TERMINAL_PROMPT", "0").stdin(std::process::Stdio::null()).kill_on_drop(true).status()).await.unwrap().unwrap(); assert!(status.success());
+        let p = core.add_project(bunsen_core::model::NewProject { name: "示例".into(), hub: hub.to_string_lossy().into_owned(), ..Default::default() }).await.unwrap();
+        assert_eq!(call_tool(&core, "list_projects", &json!({})).await.unwrap()[0]["id"], p.id);
+        let view = call_tool(&core, "project_view", &json!({"project":"示例", "refresh":true})).await.unwrap(); assert_eq!(view["project"]["id"], p.id);
+        let sync = call_tool(&core, "project_sync", &json!({"project":p.id})).await.unwrap(); assert_eq!(sync["members"], json!([]));
+        crate::project_cli_tests::sync_members(&core, &p.id);
+        let sync = call_tool(&core, "project_sync", &json!({"project":p.id})).await.unwrap();
+        assert_eq!(sync["members"][0]["title"], "训练甲");
+        assert_eq!(sync["members"][0]["ok"], true);
+        assert_eq!(sync["members"][1]["title"], "训练乙");
+        assert_eq!(sync["members"][1]["ok"], false);
+        let failure = call_tool(&core, "session_deploy", &json!({"server_id":"local", "agent_id":"codex", "workdir":root.join("must-not-create"), "project_id":"missing"})).await.unwrap_err();
+        assert_eq!(failure.0.code, bunsen_core::Code::NotFound);
+        assert_eq!(failure.1["steps"], json!([]));
+        assert!(!root.join("must-not-create").exists());
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
 }

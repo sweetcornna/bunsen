@@ -95,7 +95,7 @@ type Session = {
 };
 
 type Step = { step: string; label: string; status: "running" | "ok" | "failed" | "skipped"; detail: string | null; ms: number | null };
-// 部署步骤固定顺序：connect → tmux → agent → workdir → plugin → start → verify
+// 部署步骤固定顺序：connect → tmux → agent → workdir → project → plugin → start → verify（project 见 12.2）
 
 type Settings = {
   theme: "dark" | "light" | "system";
@@ -398,3 +398,305 @@ type Plugin = {
 - 部署的 `plugin` 步：把选中的每个插件同步到 `~/.bunsen/plugins/<name>/`（先同步到临时目录再原子替换）。**不下发**：`.git` `.claude` `tests` `node_modules` `keys` `secrets` 目录，以及 `id_*` `*.pem` `*.key` `lab.md` `.env*` 文件。`detail` 形如 `research · 8 个技能`。一个都没选时 `skipped`。
 - 启动命令：Agent 有 `plugin_dir_flag` 时每个插件各追加一次；没有而 `plugin_prompt` 非空时，把它放在初始提示前面（没有初始提示就单独作为初始提示）。`restart` 用同样的参数（接续时不重复加提示）。
 - 命令行：`bunsen deploy` 默认带全部插件，`--no-plugins` 关闭，`--plugin <名>` 可多次指定。MCP `session_deploy` 同理（`plugins` 参数）。新增 `bunsen plugins`、MCP `plugin_list`。
+
+## 12. 本机执行与研究项目（v1.3）
+
+研究工作台 v2 第三期新增，旧接口不变；总则沿用第 0 节。正文里的【A1】【G1】等标记对应 12.8 的修订表。
+
+### 12.0 约定
+
+- 鉴权：所有 `/api/*` 带 `x-bunsen-token`，缺失或不符 401；同第 0 节。
+- 错误体：`{"error": {"code", "message", "hint"}}`，`message`、`hint` 是可直接显示的中文。本轮不新增错误码，只用：`not_found` 404、`bad_request` 400、`conflict` 409、`host_unreachable` 502、`ssh_failed` 502、`auth_failed` 502、`timeout` 504、`internal` 500（`auth_failed` 只在沿用执行出错时出现，见 G6）【G10】。
+- 长度一律按 Unicode 字符计，不按字节或 UTF-16 计【G11】。
+- 凡是返回或保存的报错、警告、`detail`、`fetch_error` 文本（含其中转述的 git、ssh、rk 输出），URL 里的用户信息一律遮成 `***`（`https://***@host/…`），在写入或返回之前统一处理，不依赖 git 自己遮【G20】。
+- 时间一律 RFC 3339 字符串；可空字段返回 `null`，不省略。
+
+### 12.1 本机作为一台服务器
+
+类 Unix 系统上，`GET /api/servers` 总有一条本机记录：
+
+```json
+{ "id": "local", "alias": "local", "host": "localhost", "user": "<本机用户>", "port": 22,
+  "key": null, "proxy_jump": null, "proxy_command": null, "source": "local",
+  "note": "本机：会话跑在这台电脑的 tmux 里，不经 ssh", "default_workdir": "~", ... }
+```
+
+- `Server.source` 取值新增 `"local"`（原有 `"upload" | "manual"`）。`id` 固定为 `"local"`，别名已被占用时依次用 `local2`、`local3`…
+- 数据目录第一次打开时插到列表最前面；环境变量 `BUNSEN_NO_LOCAL=1` 时不建。已经建过的本机记录在设了这个变量时保留在 `servers.json` 里，但一律当作不存在：服务器列表（HTTP、命令行、MCP）不列出，按 id 访问返回 `not_found`，不能部署到本机，本机上已有的会话按“服务器已删除”处理；去掉变量后照常出现【G15】。所有接口（HTTP、WebSocket、命令行、MCP）里指定服务器的参数仍然接受 id 或别名，和原来一样；只有保留 id `local` 例外：它永远指本机，本机记录被隐藏或不存在时返回 `not_found`，不会按别名匹配到一台别名叫 local 的远程服务器【G24】。Windows 上没有。
+- 本机上的所有操作（测试、探测、显卡、主机笔记、部署、send/keys/capture/restart/stop/delete、文件、git、科研面板、产物、终端）与远程服务器同一套接口、同一套行为；差别只在执行方式（本机 `bash -s`，不经 ssh）。
+- 规则：
+  - `DELETE /api/servers/local` → 400 `bad_request`，`hint` 说明可以用 `BUNSEN_NO_LOCAL=1`。
+  - `PATCH /api/servers/local` 只接受 `alias`、`note`、`default_workdir`；改 `host`、`user`、`port`、`key`、`proxy_jump`、`proxy_command` 任一项 → 400。带了这些字段但值与现值相同不算改动【G4】。
+  - `POST /api/servers/local/test` 不尝试密钥（`try_all_keys` 忽略），`key_used` 为 `null`。
+  - 导入的 ssh 配置里有与本机同名的 `Host` → 跳过并在 `warnings` 里说明，不改本机记录。
+  - 本机不写进生成的 `ssh/config`。
+- 本机上的会话：`attach_cmd` 为 `tmux -L bunsen attach-session -t '=op-<id>'`；部署步骤 `connect` 的 `label` 为“检查本机”，`detail` 为“本机（<用户>）”；插件直接复制到 `~/.bunsen/plugins/<名>`，`detail` 不带 rsync/tar 说明。
+- 终端（`/ws/term?server=local&pane=shell` 等）在本机伪终端里直接跑 `bash -lc …`；`pane=shell` 不带会话时开用户的登录 shell。
+- 本机执行时去掉环境变量 `CLAUDECODE`、`CLAUDE_CODE_*`、`TMUX`、`TMUX_PANE`，免得本机 tmux 里的代理以为自己是嵌套会话。
+
+### 12.2 会话与部署的变化
+
+`Session` 新增两个字段（旧记录读出为 `null`）：
+
+```ts
+type Session = { /* 原有字段 */
+  project_id: string | null;   // 部署时接入的研究项目
+  machine: string | null;      // 这台机器在项目里的代号（rk id），对应汇合点上的 sync/<代号>
+};
+```
+
+`POST /api/sessions`（部署）请求体新增 `project_id?: string`（id 或 name）。找不到这个项目时，在任何步骤开始之前就拒绝，`error.code` 为 `not_found`，和服务器、Agent 不存在一样，不留下任何步骤和副作用；传输方式按第 5 节“部署”：流式时只有一行 `{"type":"error",…}`，非流式时 422 `{error, steps: []}`【G5】。带上时，在 `workdir` 与 `plugin` 两步之间多一步：
+
+| step | label | 说明 |
+| --- | --- | --- |
+| `project` | 接入研究项目 | 没带 `project_id` 时为 `skipped`，`detail` “未接入研究项目” |
+
+`project` 这一步在目标服务器的工作目录里依次：
+
+1. 按 12.4 算出这台服务器访问汇合点用的地址；算不出（汇合点在另一台 Bunsen 服务器上、这台连不过去）→ 步骤失败，`bad_request`，`hint` 建议改用各台机器都能访问的汇合点（例如私有 GitHub 仓库）。
+2. 工作目录不是 git 仓库：目录非空 → 失败（`bad_request`，“工作目录不是空的，也不是 git 仓库”）；否则 `git clone -b <研究分支> <地址> .`；汇合点上还没有研究分支时 `git clone <地址> .`；汇合点是空的 → 失败（`bad_request`，`hint`：先在一台已有仓库的机器上部署，它会推上研究分支）。
+3. 工作目录已是 git 仓库：已有某个远程的地址等于汇合点地址就用它；否则加名为 `hub` 的远程（`hub` 已存在且地址不同 → 失败 `conflict`）。然后 `git fetch`。
+4. 仓库里没有 `user.email` 时设仓库级的 `user.name = "<机器代号或主机名> (bunsen)"`、`user.email = "bunsen@<主机名>.invalid"`，`detail` 里说明。
+5. 设仓库级 git config：`rk.branch = <研究分支>`、`rk.hub = <远程名>`。
+6. 有 `<研究目录>/tools/rk.py` 时执行 `python3 <研究目录>/tools/rk.py sync --setup --json`，取输出最后一行 JSON 的 `machine` 记到会话的 `machine`；`ok` 为假时步骤仍记 `ok`，`detail` 写同步没完成的原因（`error` 或冲突文件）。没有 `rk.py` 时 `machine` 为 `null`，`detail` 写“仓库里还没有研究目录：/research:start 之后执行 rk sync --setup（研究分支已写进 git config）”。`rk.py` 是没有 `sync` 的旧版（`python3 <研究目录>/tools/rk.py sync --help` 退出码非 0）时不执行 `--setup`，`machine` 为 `null`，步骤记 `ok`，`detail` 写“仓库里的 rk.py 是旧版，没有 sync：在这台机器上执行 /research:resume（会更新研究工具）后再执行 rk sync --setup（研究分支已写进 git config）”【G18】。
+7. 本机克隆、访问 Bunsen 服务器上的汇合点时，在本机仓库里设 `core.sshCommand = ssh -F '<Bunsen 的 ssh/config>' -o BatchMode=yes`。
+
+`project` 一步的错误码【G6】：取不到汇合点 → `host_unreachable`；目标机器本身连不上 → 沿用执行时的错误（`host_unreachable`、`ssh_failed`、`auth_failed`、`timeout`）；其余见上面各条。部署失败的传输方式不变（NDJSON 流里的 `error` 行；非流式时沿用原有状态码），`error.code` 按本条。
+
+远端元数据 `~/.bunsen/sessions/<id>.json` 同样带 `project_id`、`machine`，发现来的会话据此恢复。
+
+### 12.3 研究项目
+
+#### 12.3.1 数据类型
+
+```ts
+type Project = {
+  id: string;              // 短 id，6 位小写字母数字
+  name: string;            // 唯一，去首尾空白后 1 到 40 个字符，单行，不含 "/"【A2】
+  hub: string;             // 汇合点：git 地址，或 "<Bunsen 服务器别名>:<路径>"
+  branch: string;          // 研究分支，见 12.3.3【A1】
+  home: string;            // 仓库里的研究目录，默认 "research"；相对路径，整串不含 ".."，不以 "/" 开头【G12】
+  created_at: string;
+  fetched_at: string | null;   // 上次成功取汇合点的时间
+  fetch_error: string | null;  // 上次取汇合点失败的原因；成功后清空
+};
+
+type ProjectMember = {     // 接入这个项目的会话（session.project_id == project.id，未归档）
+  session_id: string; title: string; server_id: string; server_alias: string;
+  workdir: string; state: SessionState; machine: string | null;
+};
+
+type ProjectMachine = {    // 汇合点上的一个 sync/<代号> 分支
+  code: string;            // 代号
+  head: string;            // 分支最新提交（40 位）
+  committed_at: string | null;
+  subject: string;         // 最新提交的说明（首行）
+  ahead: number;           // 研究分支还没有的提交数
+  behind: number;          // 这台机器还没并入的研究分支提交数
+  conflict: boolean | null;// ahead>0 且 behind>0 时：并入研究分支会不会冲突；其余情况或判断不了时为 null
+  sessions: string[];      // machine == code 的成员会话 id
+  server_alias: string | null; // 这些会话所在服务器的别名（多台时取第一个）
+};
+
+type ProjectLine = {       // 一条研究线：<home>/state/<线>.md（不含 TEMPLATE.md）
+  line: string;
+  holder: string | null;   // 开头的 holder；"-" 或缺省为 null
+  token: number;           // 开头的 token；缺省为 0
+  stamped: string | null;
+  stage: string | null;    // 正文 **阶段**：…；值是模板占位（以 `<` 开头、以 `>` 结尾）时为 null【G21′】
+  waiting: string | null;  // 正文 **在等什么**：…；同上【G21′】
+  updated: string | null;  // 正文 **最后更新**：…
+  next: string[];          // “## 下一步”一节的前 3 个列表项（原文，去掉行首空白；跳过模板占位项【G21′】）
+  source: string;          // 取自哪个分支，如 "research/demo" 或 "sync/mac"
+};
+
+type ProjectRun = {        // 一条运行：<home>/runs/<运行ID>/meta.json
+  run_id: string;
+  machine: string | null;  // meta.machine_name；旧记录为 null
+  kind: string;            // meta.kind
+  state: "ok" | "failed" | "open";
+  exit_code: number | null;
+  started_at: string | null;
+  ended_at: string | null;
+  line: string | null;     // meta.line
+  note: string;
+  has_metrics: boolean;    // 同一份里有 metrics.json
+  integrated: boolean;     // 研究分支里有这条运行
+  source: string;          // 取自哪个分支
+};
+
+type ProjectView = {
+  project: Project;
+  research_head: string | null;   // 研究分支最新提交；汇合点上还没有研究分支时为 null
+  machines: ProjectMachine[];     // 按 code 排序
+  lines: ProjectLine[];           // 按 line 排序
+  runs: ProjectRun[];             // 按 started_at 倒序，缺 started_at 的排最后；最多 500 条
+  members: ProjectMember[];
+  decisions: string | null;       // 研究分支上 <home>/SUMMARY.md 里标题含“需要你决定”的那一节正文（去首尾空白），没有为 null；整行是模板占位（去掉列表符号后以 `<` 开头、以 `>` 结尾）的行不算正文，剩下的为空或只有“无”时也为 null【G21】
+  warnings: string[];             // 可直接显示的中文提示
+};
+
+type MemberSync = {
+  session_id: string; server_alias: string;
+  title: string;                  // 会话标题【A3】
+  ok: boolean;
+  detail: string;                 // 一行中文：完成 / 冲突的文件 / 失败原因
+  result: object | null;          // rk sync --json 的原始输出（最后一行 JSON）
+};
+
+type ProjectSync = { members: MemberSync[]; view: ProjectView };
+```
+
+成员仓库里有未提交内容时，`rk sync` 的合并和 git 本身的规则一致【G25】：
+- 能快进时照常快进；已暂存、未暂存的内容原样保留，快进会改到的路径有本地改动时 git 拒绝，什么都不动。
+- 需要真正合并时，暂存区必须和 HEAD 一致；有任何暂存内容（含部分暂存）就不合并：研究分支不动，本机的 sync 分支照样推上去，`ok` 为假，`detail` 写“暂存区有未提交的内容，这次没有并入 <分支>：提交或取消暂存后再执行 rk sync”。不算冲突。
+- `rk sync` 不另建临时索引；HEAD 一旦移动就不再回滚。合并已完成而仓库的 git hook 超时或失败时，按合并完成报告，`detail` 另写 hook 没有正常结束。
+
+#### 12.3.2 接口
+
+| 方法 | 路径 | 请求 | 响应 |
+| --- | --- | --- | --- |
+| GET | `/api/projects` | | `Project[]`，按 `created_at` 升序 |
+| POST | `/api/projects` | `NewProject` | 201 `Project` |
+| GET | `/api/projects/:id` | | `Project`（`:id` 可以是 id 或 name，下同；先按 id 找，找不到再按 name） |
+| DELETE | `/api/projects/:id` | | 204 |
+| GET | `/api/projects/:id/view` | 查询参数 `refresh=1` 可选 | `ProjectView` |
+| POST | `/api/projects/:id/sync` | 无请求体 | `ProjectSync` |
+
+```ts
+type NewProject = {
+  name: string;
+  hub: string;
+  branch?: string;     // 缺省：汇合点上恰好一个 research/* 时取它；没有时按 12.3.3 由 name 规整出简称
+  home?: string;       // 缺省 "research"
+  create?: boolean;    // 汇合点是 "<服务器别名>:<路径>"（含本机）且路径不存在时，在那里 git init --bare；git 地址时忽略；默认 false
+};
+```
+
+#### 12.3.3 研究分支名【A1、G1】
+
+- 合规：`^research/[A-Za-z0-9][A-Za-z0-9_.-]{0,39}$`（只认 ASCII，简称最多 40 个字符），并且简称里没有 `..`、不以 `.` 或 `.lock` 结尾。后端、前端、研究插件 `rk.py`（`rk sync --setup --branch`）用同一条规则。
+- 缺省简称：取名称里的 ASCII 字母、数字、`_`、`-`，其余每一段连续字符换成一个 `-`；去掉首尾的非字母数字；截到 40 个字符后再去一次尾部的非字母数字；结果为空时用 `main`。`rk sync --setup` 从仓库目录名推研究分支时用同一规则。
+
+**POST /api/projects**
+
+- 校验：`name` 去首尾空白后非空、≤ 40 字符、单行、不含 `/`、不能是 `.` 或 `..`（浏览器会把路径里的这两段规整掉）【G19】；`hub` 非空、单行、不含空白；`branch`、`home` 合规。不合规 → 400。`name` 已存在 → 409。
+- `hub` 写成 `<别名>:<路径>` 且别名是 Bunsen 里的远程服务器 → 指那台服务器上的裸仓库；`create: true` 且路径不存在时在那里 `git init --bare -q`。`local:<路径>` 永远指本机，没有本机记录时（`BUNSEN_NO_LOCAL=1`、Windows）也一样：镜像照样从本机路径取，只是没有本机会话可以接入【G13】；本机改过别名时，`<本机的别名>:<路径>` 也指本机。`create` 对本机同样生效。其余一律当作 git 地址原样使用（含 `git@github.com:…`）。
+- 在数据目录 `hubs/<id>.git` 建只读镜像并取一次（12.4）。取不到 → 502 `host_unreachable`，不保存项目，`message` 带 git 报错的要点（见 12.4“git 报错摘要”）【G22】。
+- 没给 `branch` 且汇合点上有不止一个 `research/*` → 400，`hint` 列出这些分支。
+- 汇合点可以是空的（还没有任何分支），此时保存项目，`fetched_at` 有值。
+
+**DELETE /api/projects/:id**：删除记录和镜像目录。接入它的会话保留，`project_id` 不动；前端把找不到的项目显示为“（已删除的项目）”。
+
+**GET /api/projects/:id/view**
+
+- 镜像上次成功取得超过 20 秒、或带 `refresh=1` 时，先取一次。取失败不报错：用镜像里已有的内容出视图，`project.fetch_error` 写原因，`warnings` 加一条“取不到汇合点：…，显示的是 <fetched_at> 的内容”，`<fetched_at>` 写成 `YYYY-MM-DD HH:MM UTC`；从没取成功过时整句写成“取不到汇合点：…，还没有成功取得过汇合点”【G7】。
+- 同一项目的取镜像同一时刻只做一次（并发请求等它完成后共用结果）。
+
+**POST /api/projects/:id/sync**
+
+- 对每个成员会话（未归档；服务器存在）在其服务器上执行 `cd <workdir> && python3 <home>/tools/rk.py sync --json`，各会话并发，每个限时 200 秒。
+- 退出码 0 → `ok: true`；1 → `ok: false`，`detail` 取 JSON 里的冲突文件或 `error`；找不到 `rk.py`、连不上 → `ok: false`，`detail` 写原因，`result: null`。`rk.py` 是没有 `sync` 的旧版（判断同 12.2 第 6 条，在同一个脚本里探测）→ `ok: false`，`result: null`，`detail` 写“这台机器上仓库里的 rk.py 是旧版，没有 sync：在那里执行 /research:resume 更新研究工具”【G18】。
+- 都完成后带 `refresh=1` 的语义重新出视图，放进 `view`。没有成员时 `members: []`，照样返回视图。
+
+### 12.4 汇合点与视图的推导规则
+
+**访问地址**
+
+| 汇合点写法 | 镜像（本机）用的地址 | 本机会话 | 汇合点所在的服务器 S 上的会话 | 其他服务器上的会话 |
+| --- | --- | --- | --- | --- |
+| git 地址 | 原样 | 原样 | 原样 | 原样 |
+| `<S 的别名>:<路径>` | `op-<S.id>:<路径>`，经 Bunsen 的 ssh 配置 | 同左，仓库里设 `core.sshCommand` | 本地路径（相对路径相对 `$HOME`，`~/` 展开） | 不支持，部署失败 |
+| `local:<路径>` | 本地路径 | 本地路径 | — | 不支持，部署失败 |
+
+所有 git 子进程：`GIT_TERMINAL_PROMPT=0`，标准输入为空（唯一例外：`git cat-file --batch` 的标准输入是去重后的对象哈希），取汇合点限时 120 秒。
+
+传输限制【G16】：Bunsen 起的 git 子进程（镜像，以及部署 `project` 一步在目标机器上执行的 git）和研究插件 `rk.py` 的 git 子进程，只允许 `file`、`git`、`http`、`https`、`ssh` 几种传输，用环境变量 `GIT_ALLOW_PROTOCOL=file:git:http:https:ssh`，不受用户 git 配置影响。`ext::` 等其他写法的地址在取汇合点时失败（建项目时 502 `host_unreachable`，`message` 带 git 的报错），校验规则不变。
+
+**镜像**：`<数据目录>/hubs/<项目 id>.git`，裸仓库；取 `+refs/heads/research/*:refs/heads/research/*` 和 `+refs/heads/sync/*:refs/heads/sync/*`，带 `--prune`。只读，不往汇合点推任何东西。
+
+**机器**：每个 `sync/<代号>` 一条。`ahead`/`behind` 用 `git rev-list --left-right --count <研究分支>...sync/<代号>`；研究分支不存在时 `ahead` 为该分支的提交总数、`behind` 为 0。`conflict` 用 `git merge-tree --write-tree --quiet`：退出码 1 为冲突，0 为不冲突，其他（含 git 太旧）为 `null`。
+
+**研究线**：在研究分支和所有 `sync/*` 分支里收集 `<home>/state/*.md` 的每一份，按 `(token, 是否取自 sync/<该份的 holder>, stamped)` 取最大的一份。即：编号大的为准；编号相同时以推进者自己分支上的那份为准（它最新）。
+
+**运行**：在研究分支和所有 `sync/*` 分支里收集 `<home>/runs/<ID>/meta.json`。同一个 ID 有几份时，有结束记录（目录里有 `exit_code` 文件，或 meta 里有 `exit_code`）的优先，其次研究分支上的那份。`state`：退出码 0 为 `ok`，非 0 为 `failed`，没有退出码为 `open`。`integrated`：研究分支里有这个运行目录。
+
+**警告**（`warnings`，按出现顺序）：
+
+- 取不到汇合点（见上）。
+- 汇合点上还没有研究分支：“汇合点上还没有 <分支>：在一台机器上部署接入本项目，或在仓库里执行 rk sync --setup”。
+- 某台机器 `conflict == true`：“<代号> 的记录并入 <分支> 会冲突，要在那台机器上解决（rk sync 会列出冲突的文件）”。
+- 某台机器 `behind > 0` 且最新提交早于 24 小时：“<代号> 已经 N 小时没有同步”。
+- 成员会话 `machine` 为空：“会话 <标题> 还没有机器代号：仓库里有研究目录后在那里执行 rk sync --setup”。
+- 有文件因过大或过多没有读入（见下面的读取上限）：“汇合点里有 N 个文件过大或过多，没有读入视图”【G14】；N 按去重后的路径计，同一路径在几个分支上都没读只算 1 个【G23】。
+
+读 git 对象用一次 `git ls-tree -r` 每分支、一次 `git cat-file --batch`（按对象哈希去重），不要逐文件起进程。
+
+git 报错摘要【G22】：凡是要把 git（及其底下的 ssh）的报错写进 `message`、`fetch_error`、警告或步骤 `detail` 的地方，去掉空行和 git 的固定提示（`Please make sure you have the correct access rights`、`and the repository exists.`），保留最后最多 3 行，用“；”连接，再按 G20 脱敏，截到 300 个字符。
+
+读取上限【G14】：`ls-tree` 只列 `<home>` 下（按字面路径，不做 pathspec 匹配），边读边筛，只留下视图用得到的路径，每个分支最多留 20000 条，超出的不读。读正文前按 `ls-tree -l` 给出的大小判断：单个对象超过 1 MiB 不读，当作没有这份；一次出视图读入的正文合计最多 64 MiB，之后的不读。有没读的文件时，`warnings` 末尾加一条“汇合点里有 N 个文件过大或过多，没有读入视图”。
+
+### 12.5 命令行与 MCP
+
+命令行（输出风格同现有子命令，`--json` 输出与 HTTP 相同的 JSON）：
+
+```
+bunsen projects [--json]
+bunsen project add <名称> <汇合点> [--branch research/<简称>] [--home research] [--create] [--json]
+bunsen project view <项目> [--refresh] [--json]
+bunsen project sync <项目> [--json]
+bunsen project rm <项目>
+bunsen deploy … [--project <项目>]
+```
+
+MCP 新增工具 `list_projects`、`project_view`（参数 `project`、`refresh?`）、`project_sync`（参数 `project`）；部署工具新增可选参数 `project_id`。
+
+### 12.6 数据目录
+
+新增 `projects.json`（项目列表，权限 600，与 `servers.json` 同样的读改写方式）和 `hubs/<项目 id>.git/`（镜像，可随时删掉重建）。`sessions.json` 里的会话记录多两个可空字段。旧数据目录无需迁移。
+
+跨进程互斥【G17】：serve、命令行、MCP 三个进程共用数据目录。所有 JSON 文件的读改写在数据目录的 `.lock` 上加文件锁；每个镜像的取、读视图、删除在 `hubs/<项目 id>.lock` 上加文件锁，删除项目时锁文件可以留下。用 Rust 标准库的文件锁，不引入新依赖。
+
+### 12.7 前端
+
+- 新页面“研究项目”：项目列表；新建项目表单（名称、汇合点、研究分支、研究目录、“在服务器上新建裸仓库”）；项目视图（机器表、研究线表、运行表、成员会话、需要你决定的事、警告），“刷新”按钮（`refresh=1`）和“立即同步”按钮（`POST …/sync`，逐会话显示结果）。
+- 部署对话框：可选“接入研究项目”下拉框（`project_id`）；部署步骤里显示 `project` 一步。
+- 服务器列表：`source == "local"` 显示“本机”标签，不显示删除按钮，编辑表单只给别名、备注、默认工作目录。
+- 会话：有 `project_id` 时显示项目名（项目已删除时显示“（已删除的项目）”）和机器代号。
+
+### 12.8 修订记录
+
+第三期开发中对已确认契约（2026-11-12）的修订，均在 2026-11-13。A 类经用户确认；G 类是主编排对没写清之处的裁定，来源是前后端审查、联调和端到端验证。
+
+| 编号 | 内容 | 位置 |
+| --- | --- | --- |
+| A1 | 研究分支名只认 ASCII，简称最多 40 个字符，且必须是有效 git 分支名；`rk.py` 同步改 | 12.3.1、12.3.3 |
+| A2 | 项目名称不能含 `/`（`:id` 可以写名称，`/` 会破坏路径） | 12.3.1、12.3.2 |
+| A3 | `MemberSync` 加 `title`（会话标题），同一台服务器上有几个会话时分得清 | 12.3.1 |
+| G1 | 缺省研究分支的规整规则；规整不出时用 `research/main` | 12.3.3 |
+| G2 | `create` 对本机同样生效；git 地址时忽略 | 12.3.2 |
+| G3 | `local:` 永远指本机；本机改名后新别名也指本机 | 12.3.2 |
+| G4 | PATCH 本机带了与现值相同的连接字段不算改动 | 12.1 |
+| G5 | 部署时找不到 `project_id`：任何步骤之前 `not_found` | 12.2 |
+| G6 | `project` 一步各种失败的错误码 | 12.2 |
+| G7 | 警告里取得时间的写法 `YYYY-MM-DD HH:MM UTC` | 12.3.2 |
+| G8 | `:id` 先按 id 找，再按 name | 12.3.2 |
+| G9 | git 子进程标准输入为空的唯一例外是 `cat-file --batch` | 12.4 |
+| G7′ | 从没取成功过时的警告写成整句，不做字面替换 | 12.3.2 |
+| G10 | 错误码列表补上 `auth_failed`（沿用执行出错时） | 12.0 |
+| G11 | 长度按 Unicode 字符计 | 12.0 |
+| G12 | 研究目录“整串不含 `..`” | 12.3.1 |
+| G13 | 没有本机记录时 `local:<路径>` 仍指本机路径 | 12.3.2 |
+| G14 | 读汇合点对象的上限（路径数、单个对象、合计字节），超限时加一条警告 | 12.4 |
+| G15 | `BUNSEN_NO_LOCAL=1` 时已建的本机记录也当作不存在（与删除提示的说法一致） | 12.1 |
+| G16 | git 子进程只允许 file、git、http、https、ssh 传输 | 12.4 |
+| G17 | JSON 读改写和镜像操作用跨进程文件锁 | 12.6 |
+| G18 | 仓库里的 `rk.py` 是没有 `sync` 的旧版时，部署 `project` 一步和“立即同步”的处理（研究插件同时补上研究工具的升级） | 12.2、12.3.2 |
+| G19 | 项目名称不能是 `.` 或 `..` | 12.3.2 |
+| G20 | 报错、警告、detail、fetch_error 里的 URL 用户信息统一遮掉 | 12.0 |
+| G21 | `decisions` 跳过 SUMMARY 模板占位行；只剩“无”或为空时为 null | 12.3.1 |
+| G21′ | 研究线的 `stage`、`waiting`、`next` 同样跳过模板占位 | 12.3.1 |
+| G22 | git 报错摘要：去掉固定提示，保留最后最多 3 行（原来只取最后一行，ssh 地址时真正原因会丢） | 12.3.2、12.4 |
+| G23 | G14 警告里的 N 按去重后的路径计 | 12.4 |
+| G24 | 指定服务器的参数接受 id 或别名；保留 id `local` 只指本机，不按别名回退 | 12.1 |
+| G25 | rk sync 合并遵循 git 的规则：快进保留暂存内容；真正合并要求暂存区干净，否则不合并、不算冲突；HEAD 移动后不回滚 | 12.3.1 |

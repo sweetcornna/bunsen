@@ -4,11 +4,13 @@
 pub mod agents;
 pub mod core;
 pub mod error;
+pub mod exec;
 pub mod import;
 pub mod keys;
 pub mod model;
 pub mod plugins;
 pub mod probe;
+pub mod projects;
 pub mod sessions;
 pub mod shell;
 pub mod ssh;

@@ -1,9 +1,9 @@
 import * as Dialog from "@radix-ui/react-dialog";
-import { Moon, Plus, RefreshCw, Search, Server as ServerIcon, Settings as SettingsIcon, Sun } from "lucide-react";
+import { FolderGit2, Moon, Plus, RefreshCw, Search, Server as ServerIcon, Settings as SettingsIcon, Sun } from "lucide-react";
 import { useEffect, useMemo, useState, type ReactNode } from "react";
-import { SESSION_STATE } from "../lib/format";
+import { serverAddr, sessionState } from "../lib/format";
 import { go } from "../lib/route";
-import { useApp } from "../lib/store";
+import { projectLabel, useApp } from "../lib/store";
 import { AgentMark, cx, Dot } from "./ui";
 
 type Item = { key: string; label: string; hint?: string; icon: ReactNode; run: () => void };
@@ -12,6 +12,10 @@ type Item = { key: string; label: string; hint?: string; icon: ReactNode; run: (
 export function Palette({ open, onOpenChange }: { open: boolean; onOpenChange: (v: boolean) => void }) {
   const sessions = useApp((s) => s.sessions);
   const servers = useApp((s) => s.servers);
+  const projects = useApp((s) => s.projects);
+  const projectsReady = useApp((s) => s.projectsReady);
+  const projectsLoaded = useApp((s) => s.projectsLoaded);
+  const projectsMissing = useApp((s) => s.projectsMissing);
   const agents = useApp((s) => s.agents);
   const settings = useApp((s) => s.settings);
   const [query, setQuery] = useState("");
@@ -29,21 +33,32 @@ export function Palette({ open, onOpenChange }: { open: boolean; onOpenChange: (
     const dark = document.documentElement.dataset.theme !== "light";
     const all: Item[] = [
       { key: "new", label: "新对话", icon: <Plus size={14} />, run: () => go("/") },
+      { key: "projects", label: "研究项目", hint: "几台机器上的研究记录汇合后的全貌", icon: <FolderGit2 size={14} />, run: () => go("/projects") },
       { key: "servers", label: "服务器", hint: "导入 SSH 配置、测试、探测", icon: <ServerIcon size={14} />, run: () => go("/servers") },
       { key: "settings", label: "设置", icon: <SettingsIcon size={14} />, run: () => go("/settings") },
       { key: "refresh", label: "刷新所有对话的状态", icon: <RefreshCw size={14} />, run: () => void st.refreshSessions(true) },
       { key: "theme", label: dark ? "切换到浅色" : "切换到深色", icon: dark ? <Sun size={14} /> : <Moon size={14} />, run: () => void st.saveSettings({ theme: dark ? "light" : "dark" }) },
-      ...sessions.map((s) => ({
-        key: `s:${s.id}`,
-        label: s.title,
-        hint: `${SESSION_STATE[s.state].label} · ${s.server_alias} · ${s.workdir}`,
-        icon: <AgentMark id={s.agent_id} name={agents.find((a) => a.id === s.agent_id)?.name} />,
-        run: () => go(`/s/${s.id}`),
+      ...projects.map((p) => ({
+        key: `p:${p.id}`,
+        label: p.name,
+        hint: `研究项目 · ${p.branch}`,
+        icon: <FolderGit2 size={14} />,
+        run: () => go(`/p/${p.id}`),
       })),
+      ...sessions.map((s) => {
+        const project = s.project_id ? projectLabel({ projects, projectsReady, projectsLoaded, projectsMissing }, s.project_id) : null;
+        return {
+          key: `s:${s.id}`,
+          label: s.title,
+          hint: `${sessionState(s.state).label} · ${s.server_alias} · ${s.workdir}${project ? ` · ${project}` : ""}`,
+          icon: <AgentMark id={s.agent_id} name={agents.find((a) => a.id === s.agent_id)?.name} />,
+          run: () => go(`/s/${s.id}`),
+        };
+      }),
       ...servers.map((s) => ({
         key: `h:${s.id}`,
         label: `在 ${s.alias} 上开新对话`,
-        hint: `${s.user}@${s.host}`,
+        hint: serverAddr(s),
         icon: <Dot tone={s.status === "online" ? "ok" : s.status === "unknown" ? "mute" : "err"} />,
         run: () => {
           st.setDraft({ server_id: s.id });
@@ -54,7 +69,7 @@ export function Palette({ open, onOpenChange }: { open: boolean; onOpenChange: (
     const q = query.trim().toLowerCase();
     return q ? all.filter((i) => `${i.label} ${i.hint ?? ""}`.toLowerCase().includes(q)) : all;
     // settings 只为了主题切换后重算
-  }, [query, sessions, servers, agents, settings]);
+  }, [query, sessions, servers, projects, projectsReady, projectsLoaded, projectsMissing, agents, settings]);
 
   const pick = (i: Item | undefined) => {
     if (!i) return;

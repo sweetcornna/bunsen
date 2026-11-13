@@ -1,4 +1,21 @@
-import type { ServerStatus, SessionState } from "./api";
+import type { Server, ServerStatus, SessionState } from "./api";
+
+/** 是不是本机那条服务器记录（契约 v1.3 第 1 节）。判断本机一律用它，不直接比较 source。 */
+export const isLocal = (s: Pick<Server, "source"> | null | undefined) => s?.source === "local";
+
+/** 服务器地址的一行说明：本机不经 ssh，只写用户。 */
+export function serverAddr(s: Pick<Server, "source" | "user" | "host" | "port">): string {
+  if (isLocal(s)) return `本机 · ${s.user}`;
+  return `${s.user}@${s.host}${s.port !== 22 ? `:${s.port}` : ""}`;
+}
+
+/**
+ * 显示汇合点这类 git 地址时遮掉 URL 里的 userinfo：https://user:token@host/… → https://***@host/…，免得令牌出现在界面上。
+ * 只处理带 scheme:// 的写法；scp 写法（git@host:path）和 <别名>:<路径> 原样返回。userinfo 里写了裸 @ 时遮到最后一个 @。
+ */
+export function maskUserinfo(url: string): string {
+  return url.replace(/^([A-Za-z][A-Za-z0-9+.-]*:\/\/)[^/?#]*@/, "$1***@");
+}
 
 export function relTime(iso: string | null | undefined): string {
   if (!iso) return "";
@@ -55,6 +72,11 @@ export const SERVER_STATUS: Record<ServerStatus, { label: string; tone: "ok" | "
   auth_failed: { label: "认证失败", tone: "warn" },
   unknown: { label: "未检查", tone: "mute" },
 };
+
+// 状态来自服务端：新版服务端加了状态、或者拿到的根本不是会话（地址拼错时），都按“未检查”显示，不能在渲染时抛错。
+export const hasKey = <K extends string>(table: Record<K, unknown>, key: string): key is K => Object.prototype.hasOwnProperty.call(table, key);
+export const sessionState = (state: string) => (hasKey(SESSION_STATE, state) ? SESSION_STATE[state] : SESSION_STATE.unknown);
+export const serverStatus = (status: string) => (hasKey(SERVER_STATUS, status) ? SERVER_STATUS[status] : SERVER_STATUS.unknown);
 
 /** 给没有图标的东西一个稳定的色相。 */
 const HUES = [212, 28, 150, 280, 190, 320, 48, 100, 250, 5];

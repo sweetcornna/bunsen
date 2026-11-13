@@ -1,5 +1,7 @@
 //! 集成测试：起真实的 `bunsen serve`，通过 HTTP / WebSocket 接口走完整条流程。
-//! 目标是本机的一次性 SSH 容器（dev/test-server/run.sh up，dev@127.0.0.1:2222）。
+//! 目标是本机的一次性 SSH 容器（dev/test-server/run.sh up，默认 dev@127.0.0.1:2222）。
+//! 自定义端口：`BUNSEN_TEST_PORT=2223 dev/test-server/run.sh up`，然后 `dev/itest.sh`。
+//! `dev/itest.sh` 自动读取保存的端口；直接运行 cargo 时需设置同一个 `BUNSEN_TEST_PORT`（缺省 2222）。
 //!
 //! 运行：`dev/itest.sh`
 //! 或：`BUNSEN_ITEST=1 cargo test -p bunsen-cli --test itest -- --ignored --nocapture`
@@ -410,7 +412,11 @@ async fn flow() {
     assert_eq!(imp["servers_added"].as_array().unwrap().len(), 1, "{imp}");
     let sv = &imp["servers_added"][0];
     assert_eq!(sv["alias"], "bunsen-test");
-    assert_eq!(sv["port"], 2222);
+    let expected_port = std::env::var("BUNSEN_TEST_PORT")
+        .unwrap_or_else(|_| "2222".to_string())
+        .parse::<u16>()
+        .expect("BUNSEN_TEST_PORT 必须是有效端口");
+    assert_eq!(sv["port"], expected_port);
     assert_eq!(sv["key"], "id_test");
     assert_eq!(sv["status"], "online", "{imp}");
     assert_eq!(imp["keys_added"][0]["name"], "id_test");
@@ -545,11 +551,17 @@ async fn flow() {
     .await;
     let last = lines.last().unwrap();
     assert_eq!(last["type"], "done", "部署失败：{lines:?}");
-    let order = ["connect", "tmux", "agent", "workdir", "plugin", "start", "verify"];
+    let order = ["connect", "tmux", "agent", "workdir", "project", "plugin", "start", "verify"];
     let finals: Vec<&Value> = lines.iter().filter(|l| l["type"] == "step" && l["status"] != "running").collect();
     let got: Vec<&str> = finals.iter().map(|l| l["step"].as_str().unwrap()).collect();
     assert_eq!(got, order);
     for f in &finals {
+        if f["step"] == "project" {
+            assert_eq!(f["status"], "skipped");
+            assert_eq!(f["detail"], "未接入研究项目");
+            assert!(f["ms"].is_null());
+            continue;
+        }
         assert_eq!(f["status"], "ok", "步骤没有成功：{f}");
         assert!(f["ms"].as_u64().is_some());
         let running_first = lines.iter().position(|l| l["step"] == f["step"] && l["status"] == "running").unwrap();
@@ -562,11 +574,19 @@ async fn flow() {
     assert_eq!(sess["tmux"], format!("op-{id}"));
     assert_eq!(sess["state"], "running");
     assert_eq!(sess["origin"], "local");
+    assert!(sess["project_id"].is_null());
+    assert!(sess["machine"].is_null());
     assert_eq!(sess["title"], prompt);
     assert_eq!(sess["plugin"], "research");
     assert_eq!(sess["plugins"], json!(["research", "labkit"]), "省略 plugins = 全部可用插件");
     let plug_step = finals.iter().find(|l| l["step"] == "plugin").unwrap();
-    assert_eq!(plug_step["detail"], "research · 8 个技能；labkit · 1 个技能", "{plug_step}");
+    // 与 plugins::describe 一致，只统计 skills/<名称>/SKILL.md。
+    let research_skills = std::fs::read_dir(app_root().join("plugins/research/skills"))
+        .unwrap()
+        .map(|entry| entry.unwrap().path())
+        .filter(|path| path.is_dir() && path.join("SKILL.md").is_file())
+        .count();
+    assert_eq!(plug_step["detail"], format!("research · {research_skills} 个技能；labkit · 1 个技能"), "{plug_step}");
     assert_eq!(sess["yolo"], true);
     assert!(sess["attach_cmd"].as_str().unwrap().contains(&format!("op-{id}")));
     let cap = wait_capture(&c, &a, &id, "参数: --plugin-dir").await;
@@ -825,13 +845,18 @@ async fn flow() {
              printf 'x' > out/a/b/c/d/e/f/g/h/too-deep.png; printf '{{}}' > analysis.ipynb\n\
              python3 -c \"import os; os.utime('figures/loss.png', (2000000000, 2000000000))\"\n\
              printf 'started: 2026-11-12T10:00:00+08:00\\nsession: x\\n' > research/.loop/active\n\
-             cd research && python3 tools/rk.py run 20261112-r01-smoke --explore -- sh -c 'echo hello-run; echo line2'\n\
-             for i in $(seq 1 50); do [ -f runs/20261112-r01-smoke/exit_code ] && break; sleep 0.2; done\n\
-             printf '{{\"acc\": 0.9}}' > runs/20261112-r01-smoke/metrics.json\n\
-             printf '# 20261112-r01-smoke：冒烟\\n结论\\n' > results/20261112-r01-smoke.md\n"
+             cd research\n\
+             run_id=$(python3 tools/rk.py id smoke)\n\
+             printf 'RUN_ID=%s\\n' \"$run_id\"\n\
+             python3 tools/rk.py run \"$run_id\" --explore -- sh -c 'echo hello-run; echo line2'\n\
+             for i in $(seq 1 50); do [ -f \"runs/$run_id/exit_code\" ] && break; sleep 0.2; done\n\
+             test -f \"runs/$run_id/exit_code\"\n\
+             printf '{{\"acc\": 0.9}}' > \"runs/$run_id/metrics.json\"\n\
+             printf '# %s：冒烟\\n结论\\n' \"$run_id\" > \"results/$run_id.md\"\n"
         ),
     );
     assert_eq!(rc, 0, "{out}");
+    let run_id = out.lines().find_map(|line| line.strip_prefix("RUN_ID=")).expect("夹具没有打印运行 ID").to_string();
     let lines = deploy_ndjson(&c, &a, json!({ "server_id": server_id, "agent_id": "shell", "workdir": proj, "plugins": [] })).await;
     assert_eq!(lines.last().unwrap()["type"], "done", "{lines:?}");
     assert!(lines.iter().any(|l| l["step"] == "plugin" && l["status"] == "skipped"), "plugins:[] 时 plugin 步骤 skipped");
@@ -846,22 +871,22 @@ async fn flow() {
         assert!(r[k].is_string(), "{k} 应有内容：{r}");
     }
     assert_eq!(r["prereg"], json!([{ "name": "h1.md", "title": "预登记：H1" }]));
-    assert_eq!(r["results"], json!([{ "name": "20261112-r01-smoke.md", "title": "20261112-r01-smoke：冒烟" }]));
+    assert_eq!(r["results"], json!([{ "name": format!("{run_id}.md"), "title": format!("{run_id}：冒烟") }]));
     let run = &r["runs"][0];
-    assert_eq!((run["run_id"].as_str(), run["state"].as_str(), run["exit_code"].as_i64()), (Some("20261112-r01-smoke"), Some("ok"), Some(0)), "{r}");
+    assert_eq!((run["run_id"].as_str(), run["state"].as_str(), run["exit_code"].as_i64()), (Some(run_id.as_str()), Some("ok"), Some(0)), "{r}");
     assert_eq!(run["cmd"], "sh -c 'echo hello-run; echo line2'");
     assert!(run["cwd"].as_str().unwrap().ends_with("/proj/research"));
     assert!(run["ended_at"].is_string());
     assert_eq!((run["has_metrics"].as_bool(), run["has_result"].as_bool(), run["prereg"].clone()), (Some(true), Some(true), json!([])));
     step("科研面板 v1.1：overview/lessons/log_tail、prereg/results 列表、runs 带 cmd/cwd/ended_at/has_metrics/has_result（真实 rk.py）");
 
-    let (code, d) = get(&c, &a, &format!("/api/sessions/{rid}/research/run?run_id=20261112-r01-smoke&lines=1")).await;
+    let (code, d) = get(&c, &a, &format!("/api/sessions/{rid}/research/run?run_id={run_id}&lines=1")).await;
     assert_eq!(code, 200, "{d}");
-    assert_eq!(d["run_id"], "20261112-r01-smoke");
+    assert_eq!(d["run_id"], run_id);
     assert_eq!(d["meta"]["kind"], "explore");
     assert_eq!(d["log_tail"], "line2\n", "lines=1 只取最后一行：{d}");
     assert_eq!(d["metrics"], json!({ "acc": 0.9 }));
-    assert_eq!(d["result_md"], "# 20261112-r01-smoke：冒烟\n结论\n");
+    assert_eq!(d["result_md"], format!("# {run_id}：冒烟\n结论\n"));
     for bad in ["..", "../x", "a%20b", "%24(touch%20%2Ftmp%2Fop-pwned)", ""] {
         let (code, e) = get(&c, &a, &format!("/api/sessions/{rid}/research/run?run_id={bad}")).await;
         assert_eq!((code, e["error"]["code"].as_str()), (400, Some("bad_request")), "run_id={bad}: {e}");
@@ -884,7 +909,7 @@ async fn flow() {
             ("analysis.ipynb", "notebook"),
             ("figures/loss.png", "image"),
             ("paper/main.pdf", "pdf"),
-            ("research/results/20261112-r01-smoke.md", "doc"),
+            (&format!("research/results/{run_id}.md"), "doc"),
             ("research/results/TEMPLATE.md", "doc"),
             ("results/report.md", "doc"),
             ("results/table.csv", "table"),
@@ -928,7 +953,7 @@ async fn flow() {
     m.notify("notifications/initialized");
     let tl = m.call("tools/list", json!({}));
     let tools: Vec<&str> = tl["result"]["tools"].as_array().unwrap().iter().map(|t| t["name"].as_str().unwrap()).collect();
-    for t in ["session_artifacts", "research_show", "host_notes_get", "host_notes_set", "plugin_list", "session_deploy"] {
+    for t in ["session_artifacts", "research_show", "host_notes_get", "host_notes_set", "plugin_list", "session_deploy", "list_projects", "project_view", "project_sync"] {
         assert!(tools.contains(&t), "缺少工具 {t}");
     }
     let (err, v) = m.tool("plugin_list", json!({}));
@@ -939,7 +964,7 @@ async fn flow() {
     assert!(!err && v["items"][0]["path"] == "figures/loss.png" && v["truncated"] == true, "{v}");
     let (err, v) = m.tool("research_show", json!({ "session_id": rid }));
     assert!(!err && v["present"] == true, "{v}");
-    let (err, v) = m.tool("research_show", json!({ "session_id": rid, "run_id": "20261112-r01-smoke" }));
+    let (err, v) = m.tool("research_show", json!({ "session_id": rid, "run_id": run_id }));
     assert!(!err && v["metrics"]["acc"] == 0.9, "{v}");
     let (err, v) = m.tool("research_show", json!({ "session_id": rid, "run_id": "../x" }));
     assert!(err && v["error"]["code"] == "bad_request", "{v}");

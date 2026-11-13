@@ -136,6 +136,7 @@ export function Picker<T extends string>({
   icon,
   variant = "chip",
   empty,
+  disabled,
 }: {
   value: T | null;
   onChange: (v: T) => void;
@@ -144,10 +145,13 @@ export function Picker<T extends string>({
   icon?: ReactNode;
   variant?: "chip" | "field";
   empty?: ReactNode;
+  disabled?: boolean;
 }) {
   const cur = options.find((o) => o.value === value);
+  // 始终受控：没有选中项（或选中的值不在选项里）时传空串。传 undefined 会让 Radix Select 变成非受控，
+  // 继续显示、勾选上一次选的项；Radix 2.x 把空串当作“显示占位文字”，选项的 value 不能是空串。
   return (
-    <Select.Root value={cur ? cur.value : undefined} onValueChange={(v) => onChange(v as T)}>
+    <Select.Root value={cur ? cur.value : ""} onValueChange={(v) => onChange(v as T)} disabled={disabled}>
       <Select.Trigger className={cx(variant === "chip" ? "chip" : "field select-field", !cur && "placeholder")} aria-label={placeholder}>
         {cur ? (cur.left ?? icon) : icon}
         <Select.Value placeholder={placeholder}>{cur?.label}</Select.Value>
@@ -285,9 +289,9 @@ export function Empty({ icon, title, hint, children }: { icon?: ReactNode; title
   );
 }
 
-export function Field({ label, hint, children }: { label: string; hint?: ReactNode; children: ReactNode }) {
+export function Field({ label, hint, children, className }: { label: string; hint?: ReactNode; children: ReactNode; className?: string }) {
   return (
-    <label className="form-field">
+    <label className={cx("form-field", className)}>
       <span className="form-label">{label}</span>
       {children}
       {hint && <span className="form-hint">{hint}</span>}
@@ -325,6 +329,11 @@ export function Toasts() {
           <div className="toast-text">
             <div>{t.text}</div>
             {t.hint && <div className="toast-hint">{t.hint}</div>}
+            {t.link && (
+              <a className="toast-link" href={t.link.href} onClick={() => dismiss(t.id)}>
+                {t.link.label}
+              </a>
+            )}
           </div>
           <button type="button" className="icon-btn" aria-label="关闭" onClick={() => dismiss(t.id)}>
             <X size={13} />

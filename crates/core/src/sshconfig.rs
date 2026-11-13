@@ -300,7 +300,7 @@ fn cfg_path(p: &Path) -> String {
 /// 生成 Bunsen 专用的 ssh 配置。
 pub fn render(servers: &[Server], keys_dir: &Path, known_hosts: &Path, cm_dir: &Path) -> String {
     let mut s = String::from("# 由 Bunsen 生成，每次服务器记录变化时重写；不要手改。\n\n");
-    for sv in servers {
+    for sv in servers.iter().filter(|sv| !sv.is_local()) {
         s.push_str(&format!("Host {} op-{}\n", sv.alias, sv.id));
         s.push_str(&format!("  HostName {}\n", sv.host));
         s.push_str(&format!("  User {}\n", sv.user));

@@ -59,7 +59,7 @@ export type Server = {
   key: string | null;
   proxy_jump: string | null;
   proxy_command: string | null;
-  source: "upload" | "manual";
+  source: "upload" | "manual" | "local";
   note: string;
   default_workdir: string;
   status: ServerStatus;
@@ -93,6 +93,9 @@ export type Session = {
   preview: string | null;
   attach_cmd: string;
   origin: "local" | "discovered";
+  /** v1.3：接入的研究项目与本机在项目里的代号 */
+  project_id?: string | null;
+  machine?: string | null;
 };
 
 export type StepStatus = "running" | "ok" | "failed" | "skipped";
@@ -191,7 +194,94 @@ export type DeployBody = {
   yolo?: boolean;
   plugins?: string[];
   extra_args?: string;
+  project_id?: string;
 };
+
+// ---------- 研究项目（v1.3，docs/API.md 第 12 节）----------
+
+export type Project = {
+  id: string;
+  name: string;
+  hub: string;
+  branch: string;
+  home: string;
+  created_at: string;
+  fetched_at: string | null;
+  fetch_error: string | null;
+};
+
+export type NewProject = { name: string; hub: string; branch?: string; home?: string; create?: boolean };
+
+export type ProjectMember = {
+  session_id: string;
+  title: string;
+  server_id: string;
+  server_alias: string;
+  workdir: string;
+  state: SessionState;
+  machine: string | null;
+};
+
+export type ProjectMachine = {
+  code: string;
+  head: string;
+  committed_at: string | null;
+  subject: string;
+  ahead: number;
+  behind: number;
+  conflict: boolean | null;
+  sessions: string[];
+  server_alias: string | null;
+};
+
+export type ProjectLine = {
+  line: string;
+  holder: string | null;
+  token: number;
+  stamped: string | null;
+  stage: string | null;
+  waiting: string | null;
+  updated: string | null;
+  next: string[];
+  source: string;
+};
+
+export type ProjectRun = {
+  run_id: string;
+  machine: string | null;
+  kind: string;
+  state: "ok" | "failed" | "open";
+  exit_code: number | null;
+  started_at: string | null;
+  ended_at: string | null;
+  line: string | null;
+  note: string;
+  has_metrics: boolean;
+  integrated: boolean;
+  source: string;
+};
+
+export type ProjectView = {
+  project: Project;
+  research_head: string | null;
+  machines: ProjectMachine[];
+  lines: ProjectLine[];
+  runs: ProjectRun[];
+  members: ProjectMember[];
+  decisions: string | null;
+  warnings: string[];
+};
+
+export type MemberSync = {
+  session_id: string;
+  server_alias: string;
+  /** 会话标题【修订 A3】；旧版服务端没有这个字段。 */
+  title?: string;
+  ok: boolean;
+  detail: string;
+  result: Record<string, unknown> | null;
+};
+export type ProjectSync = { members: MemberSync[]; view: ProjectView };
 
 export type ServerInput = {
   alias: string;
@@ -263,7 +353,13 @@ async function errorFrom(res: Response): Promise<ApiError> {
   return new ApiError(code, `请求失败（${res.status}）`, null, res.status);
 }
 
+// 路径里的 id、名称都用 encodeURIComponent 拼，但它不转义点：整段是 . 或 .. 时浏览器照样会把路径规范化成
+// 别的接口（例如 /api/sessions/.. → /api/），拿回来的东西会被当成会话。这种段一定不是真的 id，不发请求，直接当作找不到。
+// status 为 0：是前端自己拦下的，不是服务端说没有（调用方据此不去改列表，例如不把同名的项目当成已删除）。
+const DOT_SEGMENT = /\/(?:\.|%2e){1,2}(?=[/?#]|$)/i;
+
 async function send(method: string, path: string, body?: unknown, accept?: string): Promise<Response> {
+  if (DOT_SEGMENT.test(path.split("?")[0])) throw new ApiError("not_found", "地址不对：找不到这一项", "检查地址栏里的 id 或名称。", 0);
   const headers: Record<string, string> = { "x-bunsen-token": token() };
   if (accept) headers["accept"] = accept;
   let payload: BodyInit | undefined;
@@ -312,45 +408,52 @@ export const api = {
     return req<ImportResult>("POST", "/api/servers/import", fd);
   },
   addServer: (s: ServerInput) => req<Server>("POST", "/api/servers", s),
-  patchServer: (id: string, s: Partial<ServerInput>) => req<Server>("PATCH", `/api/servers/${id}`, s),
-  deleteServer: (id: string) => req<unknown>("DELETE", `/api/servers/${id}`),
+  patchServer: (id: string, s: Partial<ServerInput>) => req<Server>("PATCH", `/api/servers/${encodeURIComponent(id)}`, s),
+  deleteServer: (id: string) => req<unknown>("DELETE", `/api/servers/${encodeURIComponent(id)}`),
   testServer: (id: string, tryAllKeys = false) =>
-    req<TestResult>("POST", `/api/servers/${id}/test`, { try_all_keys: tryAllKeys }),
-  probeServer: (id: string) => req<Server>("POST", `/api/servers/${id}/probe`, {}),
-  gpus: (id: string) => req<Gpu[]>("GET", `/api/servers/${id}/gpus`),
+    req<TestResult>("POST", `/api/servers/${encodeURIComponent(id)}/test`, { try_all_keys: tryAllKeys }),
+  probeServer: (id: string) => req<Server>("POST", `/api/servers/${encodeURIComponent(id)}/probe`, {}),
+  gpus: (id: string) => req<Gpu[]>("GET", `/api/servers/${encodeURIComponent(id)}/gpus`),
   installAgent: (id: string, agentId: string, method = 0) =>
-    req<{ tmux: string }>("POST", `/api/servers/${id}/install-agent`, { agent_id: agentId, method }),
+    req<{ tmux: string }>("POST", `/api/servers/${encodeURIComponent(id)}/install-agent`, { agent_id: agentId, method }),
 
   keys: () => req<KeyInfo[]>("GET", "/api/keys"),
   deleteKey: (name: string) => req<unknown>("DELETE", `/api/keys/${encodeURIComponent(name)}`),
 
   sessions: (refresh: boolean) => req<Session[]>("GET", `/api/sessions?refresh=${refresh ? 1 : 0}`),
-  session: (id: string) => req<Session>("GET", `/api/sessions/${id}`),
+  session: (id: string) => req<Session>("GET", `/api/sessions/${encodeURIComponent(id)}`),
   patchSession: (id: string, p: { title?: string; pinned?: boolean; archived?: boolean }) =>
-    req<Session>("PATCH", `/api/sessions/${id}`, p),
+    req<Session>("PATCH", `/api/sessions/${encodeURIComponent(id)}`, p),
   sendText: (id: string, text: string, enter = true) =>
-    req<{ ok: boolean }>("POST", `/api/sessions/${id}/send`, { text, enter }),
-  sendKeys: (id: string, keys: string[]) => req<{ ok: boolean }>("POST", `/api/sessions/${id}/keys`, { keys }),
-  capture: (id: string, lines = 200) => req<{ text: string }>("GET", `/api/sessions/${id}/capture${q({ lines })}`),
-  restart: (id: string, resume = true) => req<Session>("POST", `/api/sessions/${id}/restart`, { resume }),
-  stop: (id: string) => req<Session>("POST", `/api/sessions/${id}/stop`, {}),
+    req<{ ok: boolean }>("POST", `/api/sessions/${encodeURIComponent(id)}/send`, { text, enter }),
+  sendKeys: (id: string, keys: string[]) => req<{ ok: boolean }>("POST", `/api/sessions/${encodeURIComponent(id)}/keys`, { keys }),
+  capture: (id: string, lines = 200) => req<{ text: string }>("GET", `/api/sessions/${encodeURIComponent(id)}/capture${q({ lines })}`),
+  restart: (id: string, resume = true) => req<Session>("POST", `/api/sessions/${encodeURIComponent(id)}/restart`, { resume }),
+  stop: (id: string) => req<Session>("POST", `/api/sessions/${encodeURIComponent(id)}/stop`, {}),
   deleteSession: (id: string, force = false) =>
-    req<unknown>("DELETE", `/api/sessions/${id}?force=${force ? 1 : 0}`),
+    req<unknown>("DELETE", `/api/sessions/${encodeURIComponent(id)}?force=${force ? 1 : 0}`),
 
-  files: (id: string, path: string) => req<FileList>("GET", `/api/sessions/${id}/files${q({ path })}`),
-  file: (id: string, path: string) => req<FileContent>("GET", `/api/sessions/${id}/file${q({ path })}`),
-  git: (id: string) => req<GitStatus>("GET", `/api/sessions/${id}/git`),
-  gitDiff: (id: string, path?: string) => req<{ diff: string }>("GET", `/api/sessions/${id}/git/diff${q({ path })}`),
-  research: (id: string) => req<Research>("GET", `/api/sessions/${id}/research`),
-  run: (id: string, runId: string, lines = 200) => req<RunDetail>("GET", `/api/sessions/${id}/research/run${q({ run_id: runId, lines })}`),
-  artifacts: (id: string, limit = 300) => req<{ items: Artifact[]; truncated: boolean }>("GET", `/api/sessions/${id}/artifacts${q({ limit })}`),
+  files: (id: string, path: string) => req<FileList>("GET", `/api/sessions/${encodeURIComponent(id)}/files${q({ path })}`),
+  file: (id: string, path: string) => req<FileContent>("GET", `/api/sessions/${encodeURIComponent(id)}/file${q({ path })}`),
+  git: (id: string) => req<GitStatus>("GET", `/api/sessions/${encodeURIComponent(id)}/git`),
+  gitDiff: (id: string, path?: string) => req<{ diff: string }>("GET", `/api/sessions/${encodeURIComponent(id)}/git/diff${q({ path })}`),
+  research: (id: string) => req<Research>("GET", `/api/sessions/${encodeURIComponent(id)}/research`),
+  run: (id: string, runId: string, lines = 200) => req<RunDetail>("GET", `/api/sessions/${encodeURIComponent(id)}/research/run${q({ run_id: runId, lines })}`),
+  artifacts: (id: string, limit = 300) => req<{ items: Artifact[]; truncated: boolean }>("GET", `/api/sessions/${encodeURIComponent(id)}/artifacts${q({ limit })}`),
   raw: async (id: string, path: string): Promise<ArrayBuffer> => {
-    const res = await send("GET", `/api/sessions/${id}/raw${q({ path })}`);
+    const res = await send("GET", `/api/sessions/${encodeURIComponent(id)}/raw${q({ path })}`);
     if (!res.ok) throw await errorFrom(res);
     return res.arrayBuffer();
   },
-  notes: (serverId: string) => req<HostNotes>("GET", `/api/servers/${serverId}/notes`),
-  putNotes: (serverId: string, text: string) => req<HostNotes>("PUT", `/api/servers/${serverId}/notes`, { text }),
+  projects: () => req<Project[]>("GET", "/api/projects"),
+  addProject: (p: NewProject) => req<Project>("POST", "/api/projects", p),
+  deleteProject: (id: string) => req<unknown>("DELETE", `/api/projects/${encodeURIComponent(id)}`),
+  projectView: (id: string, refresh = false) =>
+    req<ProjectView>("GET", `/api/projects/${encodeURIComponent(id)}/view${q({ refresh: refresh ? 1 : undefined })}`),
+  syncProject: (id: string) => req<ProjectSync>("POST", `/api/projects/${encodeURIComponent(id)}/sync`),
+
+  notes: (serverId: string) => req<HostNotes>("GET", `/api/servers/${encodeURIComponent(serverId)}/notes`),
+  putNotes: (serverId: string, text: string) => req<HostNotes>("PUT", `/api/servers/${encodeURIComponent(serverId)}/notes`, { text }),
 };
 
 /** 部署：按行读 NDJSON，每来一步回调一次，最后返回建好的会话。 */
@@ -358,9 +461,14 @@ export async function deploy(body: DeployBody, onStep: (s: Step) => void): Promi
   const res = await send("POST", "/api/sessions", body, "application/x-ndjson");
   const type = res.headers.get("content-type") ?? "";
   if (!type.includes("ndjson") || !res.body) {
+    // 非流式：成功是 {session, steps}，失败是 422 {error, steps}。失败时也先把走过的步骤交出去，界面上看得到停在哪一步。
+    const j = await res
+      .clone()
+      .json()
+      .catch(() => null);
+    for (const s of (Array.isArray(j?.steps) ? j.steps : []) as Step[]) onStep(s);
     if (!res.ok) throw await errorFrom(res);
-    const j = await res.json();
-    for (const s of (j.steps ?? []) as Step[]) onStep(s);
+    if (!j?.session) throw new ApiError("internal", "部署没有返回结果", "看看服务端日志。", res.status);
     return j.session as Session;
   }
   const reader = res.body.getReader();

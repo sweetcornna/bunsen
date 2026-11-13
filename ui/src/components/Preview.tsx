@@ -99,7 +99,7 @@ export function FilePreview({ sessionId, path, stamp, onQuote, left }: { session
           <Code text={text} />
         ) : kind === "markdown" ? (
           <div className="pad">
-            <Markdown text={text} />
+            <Markdown text={text} images="link" />
           </div>
         ) : kind === "table" ? (
           <DataTable text={text} delim={extOf(path) === "tsv" ? "\t" : ","} />
@@ -188,7 +188,7 @@ function NbCellView({ cell }: { cell: NbCell }) {
   if (cell.type === "markdown")
     return (
       <div className="nb-md">
-        <Markdown text={cell.source} />
+        <Markdown text={cell.source} images="link" />
       </div>
     );
   return (

@@ -17,7 +17,7 @@ if command -v jq >/dev/null 2>&1; then
 fi
 
 block() {
-  echo "【research】已拦截：$1。密钥和口令只用于登录，只引用文件路径，不读出内容，不写进命令、文件、仓库、协作文档、子代理任务说明或任何消息，也不在回复里复述。SSH 用 ~/.ssh/config 里的别名（或 ssh -i <私钥路径>）；程序要口令时让它自己从文件读（例如 --password-file <路径>）。确实需要人看的，请用户自己打开。" >&2
+  echo "【research】已拦截：${1}。密钥和口令只用于登录，只引用文件路径，不读出内容，不写进命令、文件、仓库、协作文档、子代理任务说明或任何消息，也不在回复里复述。SSH 用 ~/.ssh/config 里的别名（或 ssh -i <私钥路径>）；程序要口令时让它自己从文件读（例如 --password-file <路径>）。确实需要人看的，请用户自己打开。" >&2
   exit 2
 }
 
@@ -48,7 +48,7 @@ case "$tool" in
     p="$path"
     case "$p" in "~/"*) p="$HOME/${p#\~/}" ;; esac
     ref=$(printf '%s\n' "$p" | secret_refs | head -n1)
-    [ -n "$ref" ] && block "这次调用要读取私钥或口令文件（$ref）"
+    [ -n "$ref" ] && block "这次调用要读取私钥或口令文件（${ref}）"
     ;;
   Bash)
     [ -n "$cmd" ] || exit 0
@@ -57,7 +57,7 @@ case "$tool" in
     verbs='cat|less|more|head|tail|bat|nl|tac|rev|xxd|od|hexdump|strings|base64|grep|egrep|fgrep|rg|ag|sed|awk|cut|sort|uniq|diff|cmp|cp|mv|tee|pbcopy|xclip|openssl|gpg|vi|vim|nano|code|open'
     if printf '%s\n' "$cmd" | grep -Eq "(^|[[:space:];|&(\`/])($verbs)([[:space:]]|$)" ||
        printf '%s\n' "$cmd" | grep -Eq '<[[:space:]]*[^[:space:]<]*(keys|secrets)(/|[[:space:]]|$)'; then
-      block "这条命令会读出私钥或口令文件的内容（$ref）"
+      block "这条命令会读出私钥或口令文件的内容（${ref}）"
     fi
     ;;
 esac

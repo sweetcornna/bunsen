@@ -3,6 +3,7 @@ import "@xterm/xterm/css/xterm.css";
 import "./styles/tokens.css";
 import "./styles/app.css";
 import { App } from "./App";
+import { ErrorBoundary } from "./components/ErrorBoundary";
 import { captureToken } from "./lib/api";
 
 // 先用上次的主题，免得设置读回来之前闪一下。
@@ -14,4 +15,8 @@ try {
 }
 
 captureToken();
-createRoot(document.getElementById("root")!).render(<App />);
+createRoot(document.getElementById("root")!).render(
+  <ErrorBoundary>
+    <App />
+  </ErrorBoundary>,
+);

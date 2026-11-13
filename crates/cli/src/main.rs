@@ -3,11 +3,11 @@
 mod http;
 mod mcp;
 
-use clap::{Parser, Subcommand};
 use bunsen_core::import::Upload;
 use bunsen_core::model::*;
 use bunsen_core::term::TermTarget;
 use bunsen_core::{Core, Error};
+use clap::{Parser, Subcommand};
 use serde::Serialize;
 use std::process::ExitCode;
 use std::sync::Arc;
@@ -37,6 +37,13 @@ enum Cmd {
     },
     /// 列出服务器
     Servers,
+    /// 列出研究项目
+    Projects,
+    /// 管理研究项目
+    Project {
+        #[command(subcommand)]
+        cmd: ProjectCmd,
+    },
     /// 导入 ssh 配置、私钥或 ZIP（自动测试连接）
     Import {
         #[arg(required = true)]
@@ -79,6 +86,9 @@ enum Cmd {
         /// 不带任何插件
         #[arg(long, conflicts_with = "plugins")]
         no_plugins: bool,
+        /// 接入研究项目（id 或名称）
+        #[arg(long)]
+        project: Option<String>,
         /// 原样追加到启动命令
         #[arg(long, allow_hyphen_values = true)]
         extra_args: Option<String>,
@@ -138,6 +148,77 @@ enum Cmd {
     },
     /// 标准输入输出上的 MCP 服务
     Mcp,
+}
+
+#[derive(Subcommand)]
+enum ProjectCmd {
+    /// 添加研究项目，并验证汇合点
+    Add {
+        name: String,
+        hub: String,
+        #[arg(long)]
+        branch: Option<String>,
+        #[arg(long)]
+        home: Option<String>,
+        /// 路径不存在时在汇合点所在服务器上建立裸仓库
+        #[arg(long)]
+        create: bool,
+    },
+    /// 查看机器、研究线、运行和待决定事项
+    View {
+        project: String,
+        #[arg(long)]
+        refresh: bool,
+    },
+    /// 同步项目的所有成员会话
+    Sync { project: String },
+    /// 删除项目记录与本机镜像（保留会话和汇合点）
+    Rm { project: String },
+}
+
+fn print_projects(projects: &[Project]) {
+    if projects.is_empty() {
+        println!("还没有研究项目。用 bunsen project add <名称> <汇合点> 添加。");
+    }
+    for p in projects {
+        println!("{}  {}  {}  {}", p.id, p.name, p.branch, p.hub);
+    }
+}
+
+fn member_sync_line(m: &MemberSync) -> String {
+    format!("{}  {}  {}  {}", m.session_id, m.server_alias, m.title, m.detail)
+}
+
+fn print_project_view(v: &ProjectView) {
+    print_projects(std::slice::from_ref(&v.project));
+    for m in &v.machines {
+        println!("机器 {}  领先 {}  落后 {}  {}", m.code, m.ahead, m.behind, if m.conflict == Some(true) { "有冲突" } else { "" });
+    }
+    for l in &v.lines {
+        println!(
+            "研究线 {}  #{}  推进者={}  阶段={}  来源={}",
+            l.line,
+            l.token,
+            l.holder.as_deref().unwrap_or("-"),
+            l.stage.as_deref().unwrap_or("-"),
+            l.source
+        );
+        for next in &l.next {
+            println!("  {next}");
+        }
+    }
+    for r in &v.runs {
+        println!("运行 {}  {}  {}  来源={}  {}", r.run_id, r.kind, r.state, r.source, r.note);
+    }
+    for m in &v.members {
+        println!("会话 {}  {}  {}:{}  {}", m.session_id, m.title, m.server_alias, m.workdir, state_text(m.state));
+    }
+    if let Some(d) = &v.decisions {
+        println!("需要你决定：\n{d}");
+    }
+    for w in &v.warnings {
+        println!("注意：{w}");
+    }
 }
 
 fn print_json<T: Serialize>(v: &T) {
@@ -267,8 +348,55 @@ async fn run(cli: Cli) -> Result<(), Error> {
         Cmd::Mcp => mcp::run(core).await?,
         Cmd::Servers => {
             let v = core.servers()?;
-            if json { print_json(&v) } else { print_servers(&v) }
+            if json {
+                print_json(&v)
+            } else {
+                print_servers(&v)
+            }
         }
+        Cmd::Projects => {
+            let projects = core.projects()?;
+            if json {
+                print_json(&projects)
+            } else {
+                print_projects(&projects)
+            }
+        }
+        Cmd::Project { cmd } => match cmd {
+            ProjectCmd::Add { name, hub, branch, home, create } => {
+                let p = core.add_project(NewProject { name, hub, branch, home, create }).await?;
+                if json {
+                    print_json(&p)
+                } else {
+                    print_projects(&[p])
+                }
+            }
+            ProjectCmd::View { project, refresh } => {
+                let v = core.project_view(&project, refresh).await?;
+                if json {
+                    print_json(&v)
+                } else {
+                    print_project_view(&v)
+                }
+            }
+            ProjectCmd::Sync { project } => {
+                let v = core.sync_project(&project).await?;
+                if json {
+                    print_json(&v)
+                } else {
+                    for m in &v.members {
+                        println!("{}", member_sync_line(m));
+                    }
+                    print_project_view(&v.view);
+                }
+            }
+            ProjectCmd::Rm { project } => {
+                core.delete_project(&project).await?;
+                if !json {
+                    println!("已删除项目，接入它的会话保留。");
+                }
+            }
+        },
         Cmd::Import { files } => {
             let mut uploads = Vec::new();
             for f in files {
@@ -290,7 +418,7 @@ async fn run(cli: Cli) -> Result<(), Error> {
                     println!("保存私钥 {}（{} {}）", k.name, k.kind, k.fingerprint);
                 }
                 for t in &r.tests {
-                    let alias = core.server(&t.server_id).map(|s| s.alias).unwrap_or_else(|_| t.server_id.clone());
+                    let alias = core.server_by_id(&t.server_id).map(|s| s.alias).unwrap_or_else(|_| t.server_id.clone());
                     if t.ok {
                         println!("连接 {alias}：成功（密钥 {}）", t.key_used.as_deref().unwrap_or("默认"));
                     } else {
@@ -307,7 +435,12 @@ async fn run(cli: Cli) -> Result<(), Error> {
             if json {
                 print_json(&r);
             } else if r.ok {
-                println!("连接 {} 成功，{} ms，密钥 {}", r.server.alias, r.latency_ms.unwrap_or(0), r.key_used.as_deref().unwrap_or("默认"));
+                println!(
+                    "连接 {} 成功，{} ms，密钥 {}",
+                    r.server.alias,
+                    r.latency_ms.unwrap_or(0),
+                    r.key_used.as_deref().unwrap_or("默认")
+                );
             } else {
                 println!("连接 {} 失败：{}", r.server.alias, r.server.status_detail.as_deref().unwrap_or("未知原因"));
             }
@@ -345,9 +478,13 @@ async fn run(cli: Cli) -> Result<(), Error> {
         }
         Cmd::Sessions { refresh } => {
             let v = core.sessions(refresh).await?;
-            if json { print_json(&v) } else { print_sessions(&v) }
+            if json {
+                print_json(&v)
+            } else {
+                print_sessions(&v)
+            }
         }
-        Cmd::Deploy { server, agent, workdir, title, prompt, yolo, plugins, no_plugins, extra_args } => {
+        Cmd::Deploy { server, agent, workdir, title, prompt, yolo, plugins, no_plugins, extra_args, project } => {
             let plugins = if no_plugins {
                 Some(vec![])
             } else if plugins.is_empty() {
@@ -365,6 +502,7 @@ async fn run(cli: Cli) -> Result<(), Error> {
                 plugin: None,
                 plugins,
                 extra_args,
+                project_id: project.map(|p| core.project(&p).map(|p| p.id)).transpose()?,
             };
             let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<Step>();
             let printer = tokio::spawn(async move {
@@ -396,23 +534,44 @@ async fn run(cli: Cli) -> Result<(), Error> {
         }
         Cmd::Attach { id, shell } => {
             let t = if shell { TermTarget::Shell { session: id } } else { TermTarget::Agent { session: id } };
-            let args = core.term_args(&t)?;
-            let status = std::process::Command::new("ssh").args(&args).status()?;
+            let tc = core.term_command(&t)?;
+            let mut cmd = std::process::Command::new(&tc.program);
+            cmd.args(&tc.args);
+            if tc.local {
+                for (k, _) in std::env::vars_os() {
+                    if k.to_str().is_some_and(bunsen_core::exec::scrub_var) {
+                        cmd.env_remove(k);
+                    }
+                }
+            }
+            let status = cmd.status()?;
             if !status.success() {
                 std::process::exit(status.code().unwrap_or(1));
             }
         }
         Cmd::Send { id, text, no_enter } => {
             core.send(&id, &text, !no_enter).await?;
-            if json { print_json(&serde_json::json!({ "ok": true })) } else { println!("已发送") }
+            if json {
+                print_json(&serde_json::json!({ "ok": true }))
+            } else {
+                println!("已发送")
+            }
         }
         Cmd::Capture { id, lines } => {
             let text = core.capture(&id, lines).await?;
-            if json { print_json(&serde_json::json!({ "text": text })) } else { println!("{text}") }
+            if json {
+                print_json(&serde_json::json!({ "text": text }))
+            } else {
+                println!("{text}")
+            }
         }
         Cmd::Restart { id, no_resume } => {
             let s = core.restart(&id, !no_resume).await?;
-            if json { print_json(&s) } else { println!("会话 {} 状态：{}", s.id, state_text(s.state)) }
+            if json {
+                print_json(&s)
+            } else {
+                println!("会话 {} 状态：{}", s.id, state_text(s.state))
+            }
         }
         Cmd::Plugins => {
             let v = core.plugins()?;
@@ -424,7 +583,14 @@ async fn run(cli: Cli) -> Result<(), Error> {
                         Some(path) => format!("本机 {path}"),
                         None => "内嵌".to_string(),
                     };
-                    println!("{}  {}  {} 个技能  {} 个子代理  {}", p.name, if p.version.is_empty() { "-" } else { &p.version }, p.skills.len(), p.agents.len(), src);
+                    println!(
+                        "{}  {}  {} 个技能  {} 个子代理  {}",
+                        p.name,
+                        if p.version.is_empty() { "-" } else { &p.version },
+                        p.skills.len(),
+                        p.agents.len(),
+                        src
+                    );
                 }
             }
         }
@@ -469,7 +635,14 @@ async fn run(cli: Cli) -> Result<(), Error> {
                         println!("在等用户：{b}");
                     }
                     for r in &v.runs {
-                        println!("{}  {}  {}  退出码 {}  {}", r.run_id, r.kind, r.state, r.exit_code.map(|c| c.to_string()).unwrap_or("-".into()), r.elapsed);
+                        println!(
+                            "{}  {}  {}  退出码 {}  {}",
+                            r.run_id,
+                            r.kind,
+                            r.state,
+                            r.exit_code.map(|c| c.to_string()).unwrap_or("-".into()),
+                            r.elapsed
+                        );
                     }
                 }
             }
@@ -492,14 +665,30 @@ async fn run(cli: Cli) -> Result<(), Error> {
         }
         Cmd::Stop { id } => {
             let s = core.stop(&id).await?;
-            if json { print_json(&s) } else { println!("会话 {} 状态：{}", s.id, state_text(s.state)) }
+            if json {
+                print_json(&s)
+            } else {
+                println!("会话 {} 状态：{}", s.id, state_text(s.state))
+            }
         }
     }
     Ok(())
 }
 
 fn main() -> ExitCode {
-    let cli = Cli::parse();
+    let cli = match Cli::try_parse() {
+        Ok(cli) => cli,
+        Err(err) => {
+            let code = err.exit_code();
+            let text = bunsen_core::error::redact(&err.to_string());
+            if err.use_stderr() {
+                eprint!("{text}");
+            } else {
+                print!("{text}");
+            }
+            return ExitCode::from(code as u8);
+        }
+    };
     let json = cli.json;
     let rt = match tokio::runtime::Builder::new_multi_thread().enable_all().build() {
         Ok(rt) => rt,
@@ -511,3 +700,91 @@ fn main() -> ExitCode {
         Err(e) => fail(json, &e),
     }
 }
+
+#[cfg(test)]
+mod project_cli_tests {
+    use super::*;
+
+    // 两个同机、不同标题的会话；一个同步成功，一个缺少 rk.py。
+    pub(crate) fn sync_members(core: &Core, project: &str) {
+        let root = &core.paths().data;
+        let workdir = root.join("member");
+        std::fs::create_dir_all(workdir.join("research/tools")).unwrap();
+        std::fs::write(workdir.join("research/tools/rk.py"), "print('{\"ok\":true}')\n").unwrap();
+        let missing = root.join("missing");
+        std::fs::create_dir_all(&missing).unwrap();
+        let members = [("member", "训练甲", workdir), ("failed", "训练乙", missing)];
+        let store = bunsen_core::store::Store::open(core.paths().clone()).unwrap();
+        store
+            .update_sessions(|v| {
+                for (id, title, wd) in members {
+                    v.push(
+                        serde_json::from_value(serde_json::json!({
+                            "id":id,"title":title,"server_id":"local","server_alias":"local","agent_id":"codex",
+                            "workdir":wd,"tmux":format!("op-{id}"),"created_at":"2026-11-13T00:00:00Z",
+                            "last_active_at":null,"state":"stopped","exit_status":null,"attached":0,
+                            "pinned":false,"archived":false,"plugin":null,"plugins":[],"yolo":false,
+                            "preview":null,"attach_cmd":"","origin":"local","project_id":project,"machine":null
+                        }))
+                        .unwrap(),
+                    );
+                }
+                Ok(())
+            })
+            .unwrap();
+    }
+
+    #[test]
+    fn project_sync_text_and_json_include_title() {
+        let m = MemberSync {
+            session_id: "abc123".into(),
+            server_alias: "local".into(),
+            title: "训练甲".into(),
+            ok: true,
+            detail: "完成".into(),
+            result: None,
+        };
+        assert_eq!(member_sync_line(&m), "abc123  local  训练甲  完成");
+        assert_eq!(serde_json::to_value(&m).unwrap()["title"], "训练甲");
+    }
+
+    #[test]
+    fn parse_project_commands() {
+        assert!(matches!(Cli::try_parse_from(["bunsen", "projects", "--json"]).unwrap(), Cli { json: true, cmd: Cmd::Projects }));
+        let cli = Cli::try_parse_from([
+            "bunsen",
+            "project",
+            "add",
+            "示例",
+            "local:/repo",
+            "--branch",
+            "research/demo",
+            "--home",
+            "lab",
+            "--create",
+            "--json",
+        ])
+        .unwrap();
+        assert!(matches!(cli, Cli { json: true, cmd: Cmd::Project { cmd: ProjectCmd::Add { create: true, .. } } }));
+        assert!(matches!(
+            Cli::try_parse_from(["bunsen", "project", "view", "示例", "--refresh"]).unwrap().cmd,
+            Cmd::Project { cmd: ProjectCmd::View { refresh: true, .. } }
+        ));
+        assert!(matches!(
+            Cli::try_parse_from(["bunsen", "project", "sync", "示例"]).unwrap().cmd,
+            Cmd::Project { cmd: ProjectCmd::Sync { .. } }
+        ));
+        assert!(matches!(
+            Cli::try_parse_from(["bunsen", "project", "rm", "示例"]).unwrap().cmd,
+            Cmd::Project { cmd: ProjectCmd::Rm { .. } }
+        ));
+        let deploy =
+            Cli::try_parse_from(["bunsen", "deploy", "--server", "local", "--agent", "codex", "--workdir", "/repo", "--project", "示例"])
+                .unwrap();
+        assert!(matches!(deploy.cmd, Cmd::Deploy { project: Some(p), .. } if p == "示例"));
+    }
+}
+
+#[cfg(test)]
+#[path = "../tests/support/r5.rs"]
+mod r5_support;

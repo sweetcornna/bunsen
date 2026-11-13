@@ -1,9 +1,9 @@
-import { ChevronDown, ChevronRight, MoreHorizontal, PanelLeftClose, Plus, RefreshCw, Search, Server as ServerIcon, Settings as SettingsIcon } from "lucide-react";
+import { ChevronDown, ChevronRight, FolderGit2, MoreHorizontal, PanelLeftClose, Plus, RefreshCw, Search, Server as ServerIcon, Settings as SettingsIcon } from "lucide-react";
 import { useMemo, useState } from "react";
 import type { Session } from "../lib/api";
-import { SESSION_STATE, shortTime } from "../lib/format";
+import { sessionState, shortTime } from "../lib/format";
 import { go, type Route } from "../lib/route";
-import { agentOf, useApp } from "../lib/store";
+import { agentOf, projectLabel, useApp } from "../lib/store";
 import { SessionMenu } from "./SessionMenu";
 import { cx, Dot, IconButton, Logo, Spinner } from "./ui";
 
@@ -13,6 +13,8 @@ const DAY = 86400_000;
 export function Sidebar({ route, onCollapse, onPalette }: { route: Route; onCollapse: () => void; onPalette: () => void }) {
   const sessions = useApp((s) => s.sessions);
   const servers = useApp((s) => s.servers);
+  const projects = useApp((s) => s.projects);
+  const projectsReady = useApp((s) => s.projectsReady);
   const refreshing = useApp((s) => s.refreshing);
   const refreshSessions = useApp((s) => s.refreshSessions);
   const [showArchived, setShowArchived] = useState(false);
@@ -91,6 +93,11 @@ export function Sidebar({ route, onCollapse, onPalette }: { route: Route; onColl
       </nav>
 
       <div className="side-foot">
+        <button type="button" className={cx("side-link", (route.name === "projects" || route.name === "project") && "on")} onClick={() => go("/projects")}>
+          <FolderGit2 size={14} />
+          <span>研究项目</span>
+          <em>{projects.length > 0 ? `${projects.length} 个` : projectsReady ? "未建" : ""}</em>
+        </button>
         <button type="button" className={cx("side-link", route.name === "servers" && "on")} onClick={() => go("/servers")}>
           <ServerIcon size={14} />
           <span>服务器</span>
@@ -107,12 +114,14 @@ export function Sidebar({ route, onCollapse, onPalette }: { route: Route; onColl
 
 function SessionRow({ session, active }: { session: Session; active: boolean }) {
   const agents = useApp((s) => s.agents);
+  const project = useApp((s) => (session.project_id ? projectLabel(s, session.project_id) : null));
   const agent = agentOf(agents, session.agent_id);
-  const st = SESSION_STATE[session.state];
+  const st = sessionState(session.state);
   const running = session.state === "running";
+  const tip = `${session.title}\n${st.label} · ${agent?.name ?? session.agent_id} · ${session.server_alias}:${session.workdir}${project ? `\n研究项目 ${project}${session.machine ? ` · 机器 ${session.machine}` : ""}` : ""}`;
   return (
     <div className={cx("side-row", active && "on")}>
-      <button type="button" className="side-row-main" onClick={() => go(`/s/${session.id}`)} title={`${session.title}\n${st.label} · ${agent?.name ?? session.agent_id} · ${session.server_alias}:${session.workdir}`}>
+      <button type="button" className="side-row-main" onClick={() => go(`/s/${session.id}`)} title={tip}>
         <Dot tone={st.tone} pulse={running} />
         <span className="side-row-title">{session.title}</span>
         <span className="side-row-time">{shortTime(session.last_active_at ?? session.created_at)}</span>

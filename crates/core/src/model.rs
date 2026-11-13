@@ -46,6 +46,8 @@ pub struct Agent {
 pub enum ServerSource {
     Upload,
     Manual,
+    /// v1.3：本机（不经 ssh，脚本直接交给本机的 bash）。只有一条，id 固定为 `local`。
+    Local,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -71,9 +73,16 @@ pub struct Server {
     pub note: String,
     pub default_workdir: String,
     pub status: ServerStatus,
+    #[serde(serialize_with = "crate::error::safe_optional")]
     pub status_detail: Option<String>,
     pub last_checked: Option<String>,
     pub probe: Option<Probe>,
+}
+
+impl Server {
+    pub fn is_local(&self) -> bool {
+        self.source == ServerSource::Local
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -205,6 +214,12 @@ pub struct Session {
     pub preview: Option<String>,
     pub attach_cmd: String,
     pub origin: Origin,
+    /// v1.3：部署时接入的研究项目
+    #[serde(default)]
+    pub project_id: Option<String>,
+    /// v1.3：这台机器在研究项目里的代号（`rk id`，对应汇合点上的 `sync/<代号>`）
+    #[serde(default)]
+    pub machine: Option<String>,
 }
 
 /// 本机持久化的会话记录：对外的 `Session` 加上只在本机用的字段。
@@ -230,6 +245,7 @@ pub struct Step {
     pub step: String,
     pub label: String,
     pub status: StepStatus,
+    #[serde(serialize_with = "crate::error::safe_optional")]
     pub detail: Option<String>,
     pub ms: Option<u64>,
 }
@@ -284,6 +300,7 @@ pub struct ImportTest {
     pub server_id: String,
     pub ok: bool,
     pub key_used: Option<String>,
+    #[serde(serialize_with = "crate::error::safe_optional")]
     pub detail: Option<String>,
 }
 
@@ -292,6 +309,7 @@ pub struct ImportResult {
     pub servers_added: Vec<Server>,
     pub servers_updated: Vec<Server>,
     pub keys_added: Vec<KeyInfo>,
+    #[serde(serialize_with = "crate::error::safe_warnings")]
     pub warnings: Vec<String>,
     pub tests: Vec<ImportTest>,
 }
@@ -377,6 +395,9 @@ pub struct DeployRequest {
     pub plugins: Option<Vec<String>>,
     #[serde(default)]
     pub extra_args: Option<String>,
+    /// v1.3：接入研究项目：工作目录里没有仓库时从汇合点克隆，然后 `rk sync --setup`
+    #[serde(default)]
+    pub project_id: Option<String>,
 }
 
 impl DeployRequest {
@@ -544,6 +565,140 @@ pub struct ResearchPanel {
     pub log_tail: Option<String>,
     pub prereg: Vec<NamedDoc>,
     pub results: Vec<NamedDoc>,
+}
+
+/// v1.3：跨机器的研究项目。几台机器（本机、服务器）各有一份检出，经汇合点（git 远程）汇合：
+/// 每台机器写 `sync/<代号>`，共同的研究分支是 `research/<简称>`。Bunsen 在本机保留汇合点的只读镜像，从中读出统一视图。
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Project {
+    pub id: String,
+    pub name: String,
+    /// git 地址（各台机器都能取到，例如私有 GitHub 仓库），或 `<服务器别名>:<路径>`（汇合点是 Bunsen 某台服务器上的裸仓库）
+    pub hub: String,
+    pub branch: String,
+    /// 仓库里的研究目录
+    #[serde(default = "default_research_home")]
+    pub home: String,
+    pub created_at: String,
+    #[serde(default)]
+    pub fetched_at: Option<String>,
+    #[serde(default)]
+    #[serde(serialize_with = "crate::error::safe_optional")]
+    pub fetch_error: Option<String>,
+}
+
+fn default_research_home() -> String {
+    "research".into()
+}
+
+/// `POST /api/projects`
+#[derive(Debug, Clone, Default, Deserialize)]
+pub struct NewProject {
+    pub name: String,
+    pub hub: String,
+    #[serde(default)]
+    pub branch: Option<String>,
+    #[serde(default)]
+    pub home: Option<String>,
+    /// 汇合点是某台服务器上的路径、且还不存在时，在那里建一个空的裸仓库
+    #[serde(default)]
+    pub create: bool,
+}
+
+/// 接入这个项目的会话。
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ProjectMember {
+    pub session_id: String,
+    pub title: String,
+    pub server_id: String,
+    pub server_alias: String,
+    pub workdir: String,
+    pub state: SessionState,
+    pub machine: Option<String>,
+}
+
+/// 汇合点上一台机器的 `sync/<代号>` 分支。
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ProjectMachine {
+    pub code: String,
+    pub head: String,
+    pub committed_at: Option<String>,
+    pub subject: String,
+    /// 研究分支还没有的提交数
+    pub ahead: u32,
+    /// 这台机器还没并入的研究分支提交数
+    pub behind: u32,
+    /// 并入研究分支会不会冲突；`None` 表示不用并（ahead 或 behind 为 0）或判断不了
+    pub conflict: Option<bool>,
+    /// 这台机器上接入本项目的会话 id
+    pub sessions: Vec<String>,
+    pub server_alias: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ProjectLine {
+    pub line: String,
+    pub holder: Option<String>,
+    pub token: u64,
+    pub stamped: Option<String>,
+    pub stage: Option<String>,
+    pub waiting: Option<String>,
+    pub updated: Option<String>,
+    pub next: Vec<String>,
+    /// 取自哪个分支（推进者的 sync 分支比研究分支新时取前者）
+    pub source: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ProjectRun {
+    pub run_id: String,
+    pub machine: Option<String>,
+    pub kind: String,
+    /// ok / failed / open（还没结束，或结束的记录还没同步上来）
+    pub state: String,
+    pub exit_code: Option<i64>,
+    pub started_at: Option<String>,
+    pub ended_at: Option<String>,
+    pub line: Option<String>,
+    pub note: String,
+    pub has_metrics: bool,
+    /// 研究分支里已经有这条运行
+    pub integrated: bool,
+    pub source: String,
+}
+
+/// `GET /api/projects/:id/view`
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ProjectView {
+    pub project: Project,
+    pub research_head: Option<String>,
+    pub machines: Vec<ProjectMachine>,
+    pub lines: Vec<ProjectLine>,
+    pub runs: Vec<ProjectRun>,
+    pub members: Vec<ProjectMember>,
+    /// 研究分支上 SUMMARY.md 里“需要你决定”一节
+    pub decisions: Option<String>,
+    #[serde(serialize_with = "crate::error::safe_warnings")]
+    pub warnings: Vec<String>,
+}
+
+/// `POST /api/projects/:id/sync` 里一个会话的结果。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MemberSync {
+    pub session_id: String,
+    pub server_alias: String,
+    pub title: String,
+    pub ok: bool,
+    #[serde(serialize_with = "crate::error::safe_text")]
+    pub detail: String,
+    #[serde(serialize_with = "crate::error::safe_result")]
+    pub result: Option<serde_json::Value>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ProjectSync {
+    pub members: Vec<MemberSync>,
+    pub view: ProjectView,
 }
 
 /// 区分“字段缺省”和“字段为 null”。

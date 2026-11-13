@@ -170,7 +170,7 @@ checksum = "72f5acc6cb2ba439de613abc23857ec3d78374d8ed5ac84e9d11336e87da8649"
 
 [[package]]
 name = "bunsen-cli"
-version = "0.2.1"
+version = "0.3.0"
 dependencies = [
  "axum",
  "bunsen-core",
@@ -186,7 +186,7 @@ dependencies = [
 
 [[package]]
 name = "bunsen-core"
-version = "0.2.1"
+version = "0.3.0"
 dependencies = [
  "getrandom",
  "portable-pty",

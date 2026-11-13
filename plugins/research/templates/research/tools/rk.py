@@ -10,6 +10,8 @@
     rk audit record --runs <ID,...> --verdict <总评> [--report 文件]   登记一次独立审计（结构化，rk check 据此判断）
     rk audit show [运行ID...]                  每条运行当前有效的审计总评
     rk check                                   核验记录：数字可追溯、预登记在先、结论有证据与审计、账本只追加
+    rk sync [--setup [--branch research/<简称>] [--hub 远程]] [--status] [--pull]
+                                               提交研究记录，经汇合点与别的机器汇合（本机写 sync/<代号>）
     rk loop on|off|status                      研究循环开关（Stop 钩子据此判断）
     rk block <要用户决定的事> | rk unblock      登记/解除“在等用户”
 
@@ -18,12 +20,14 @@
 研究目录默认是本文件的上上级目录，可用环境变量 RESEARCH_HOME 覆盖。
 """
 import argparse
+import builtins
 import datetime
 import getpass
 import hashlib
 import json
 import os
 import re
+import selectors
 import shlex
 import shutil
 import signal
@@ -33,6 +37,8 @@ import sys
 import tempfile
 import time
 from pathlib import Path
+
+RK_VERSION = "0.5.0"
 
 HOME = Path(os.environ.get("RESEARCH_HOME") or Path(__file__).resolve().parent.parent).resolve()
 RUNS = HOME / "runs"
@@ -52,8 +58,39 @@ def valid_run_id(rid):
 EXIT_OK, EXIT_FAILED, EXIT_USAGE, EXIT_TICK = 0, 1, 2, 3
 
 
+def redact(text):
+    # RFC 3986 authority：单引号和 !$&()*+,;=: 都是合法 userinfo，不能当边界。
+    text = str(text); result = []; cursor = 0
+    while True:
+        pos = text.find("://", cursor)
+        if pos < 0: break
+        start = pos + 3; result.append(text[cursor:start]); end = start
+        while end < len(text) and not (text[end].isspace() or text[end] in '/?#"<>'):
+            end += 1
+        at = text.rfind('@', start, end)
+        if at >= 0:
+            result.append('***@'); cursor = at + 1
+        else: cursor = start
+    result.append(text[cursor:]); return ''.join(result)
+
+
+def print(*args, **kwargs):
+    # 所有终端/JSON错误的共同出口；不能依赖 git 自己遮盖 URL。
+    builtins.print(*(redact(a) if isinstance(a, str) else a for a in args), **kwargs)
+
+
+def diagnostic(value):
+    if isinstance(value, dict):
+        return {k: (redact(v) if isinstance(v,str) and k in ("error", "detail", "message", "fetch_error") else diagnostic(v)) for k,v in value.items()}
+    if isinstance(value, list): return [diagnostic(v) for v in value]
+    return value
+
+
 def die(msg, code=EXIT_USAGE):
-    print(f"rk: {msg}", file=sys.stderr)
+    if code == EXIT_FAILED and "--json" in sys.argv:
+        print(json.dumps({"ok": False, "error": redact(msg)}, ensure_ascii=False))
+    else:
+        print(f"rk: {msg}", file=sys.stderr)
     sys.exit(code)
 
 
@@ -61,12 +98,17 @@ def now():
     return datetime.datetime.now().astimezone().isoformat(timespec="seconds")
 
 
+def git_env():
+    env = dict(os.environ, GIT_TERMINAL_PROMPT="0", GIT_ALLOW_PROTOCOL="file:git:http:https:ssh",
+               GIT_LITERAL_PATHSPECS="1")
+    for key in ("GIT_GLOB_PATHSPECS", "GIT_NOGLOB_PATHSPECS", "GIT_INDEX_FILE"):
+        env.pop(key, None)
+    return env
+
+
 def git(args, cwd):
-    try:
-        p = subprocess.run(["git", *args], cwd=str(cwd), capture_output=True, text=True)
-    except OSError:
-        return 127, ""
-    return p.returncode, p.stdout.strip()
+    rc, out, _ = git_run(args, cwd)
+    return rc, out
 
 
 def repo_root(path):
@@ -173,7 +215,7 @@ def load_meta(rid):
 
 def write_json(path, obj):
     tmp = path.with_name(path.name + ".tmp")
-    tmp.write_text(json.dumps(obj, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    tmp.write_text(json.dumps(diagnostic(obj), ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     os.replace(tmp, path)
 
 
@@ -400,7 +442,7 @@ def cmd_pull(a):
                                     f"{host}:{path.rstrip('/')}/runs/{rid}", str(tmp)],
                                    capture_output=True, text=True)
                 if p.returncode != 0 or not got.is_dir():
-                    print(f"{rid}：从 {host} 复制失败：{(p.stderr or '').strip()[:300]}", file=sys.stderr)
+                    print(f"{rid}：从 {host} 复制失败：{redact(p.stderr or '').strip()[:300]}", file=sys.stderr)
                     bad = True
                     continue
             else:
@@ -786,6 +828,12 @@ def cmd_check(a):
         if len(ms) > 1:
             warns.append(f"机器代号 {code} 被 {len(ms)} 台不同的机器用过，运行 ID 可能撞号。"
                          f"给其中一台设环境变量 RK_MACHINE_NAME（2 到 12 位小写字母或数字）。")
+    try:
+        last_sync = json.loads(SYNC_STATE.read_text(encoding="utf-8")) if sync_conf() else None
+    except (OSError, ValueError):
+        last_sync = None
+    if last_sync and not last_sync.get("ok"):
+        warns.append(f"上次同步（{last_sync.get('at')}）没完成：{sync_problem(last_sync)}")
 
     for rid in ids:
         m, (s, _) = load_meta(rid), states[rid]
@@ -814,7 +862,7 @@ def cmd_check(a):
                 if rc != 0:
                     errors.append(f"runs/{rid}：预登记提交 {p['commit'][:8]} 不在仓库历史里。")
                     continue
-                blob = subprocess.run(["git", "show", f"{p['commit']}:{p['path']}"], cwd=str(root), capture_output=True)
+                blob = git_capture(["show", f"{p['commit']}:{p['path']}"], root)
                 if blob.returncode != 0 or sha256_bytes(blob.stdout) != p["sha256"]:
                     errors.append(f"runs/{rid}：提交 {p['commit'][:8]} 里的 {p['path']} 与启动时的内容不一致。")
                 if run_commit == "missing":
@@ -861,7 +909,7 @@ def cmd_check(a):
         rc, out = git(["log", "--format=%H", "--", rel], root)
         stale = []
         for c in (out.split() if rc == 0 else []):
-            blob = subprocess.run(["git", "show", f"{c}:{rel}"], cwd=str(root), capture_output=True)
+            blob = git_capture(["show", f"{c}:{rel}"], root)
             if blob.returncode != 0:
                 continue
             m = FM_RE.match(blob.stdout.decode("utf-8", "replace"))
@@ -962,7 +1010,7 @@ def cmd_check(a):
             rc, out = git(["log", "--format=%H", "--", str(rel)], root) if rel else (1, "")
             cur, seen = ledger_rows(led_text), set()
             for c in (out.split() if rc == 0 else []):
-                blob = subprocess.run(["git", "show", f"{c}:{rel}"], cwd=str(root), capture_output=True)
+                blob = git_capture(["show", f"{c}:{rel}"], root)
                 if blob.returncode != 0:
                     continue
                 for r in ledger_rows(blob.stdout.decode("utf-8", "replace")) - cur - seen:
@@ -1151,7 +1199,7 @@ def lease_call(action, line=None, **kw):
     try:
         return json.loads(lines[-1]), None
     except (IndexError, ValueError):
-        return None, f"协调主机没有给出结果（退出码 {p.returncode}）：{(p.stderr or p.stdout).strip()[:300]}"
+        return None, f"协调主机没有给出结果（退出码 {p.returncode}）：{redact(p.stderr or p.stdout).strip()[:300]}"
 
 
 def cache_read(line):
@@ -1187,10 +1235,11 @@ def commit_paths(paths, msg):
     if not root:
         return None
     rels = [str(Path(p).resolve().relative_to(root.resolve())) for p in paths if Path(p).exists()]
-    git(["add", "--", *rels], root)
-    p = subprocess.run(["git", "commit", "-q", "-m", msg, "--", *rels], cwd=str(root), capture_output=True, text=True)
-    if p.returncode != 0:
-        print(f"rk: 提交失败，请手工提交 {' '.join(rels)}：{(p.stderr or p.stdout).strip()[:300]}", file=sys.stderr)
+    rc, out, err = git_run(["add", "--", *rels], root)
+    if rc == 0:
+        rc, out, err = git_run(["commit", "-q", "-m", msg, "--", *rels], root)
+    if rc != 0:
+        print(f"rk: 提交失败，请手工提交 {' '.join(rels)}：{last_line(err or out)}", file=sys.stderr)
         return None
     return git(["rev-parse", "HEAD"], root)[1]
 
@@ -1209,10 +1258,7 @@ def behind_upstream():
     rc, up = git(["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}"], root)
     if rc != 0:
         return 0, None
-    try:
-        subprocess.run(["git", "fetch", "-q"], cwd=str(root), capture_output=True, timeout=60)
-    except (OSError, subprocess.SubprocessError):
-        pass
+    git_run(["fetch", "-q"], root, timeout=60)
     rc, n = git(["rev-list", "--count", "HEAD..@{u}"], root)
     return (int(n) if rc == 0 and n.isdigit() else 0), up
 
@@ -1233,6 +1279,9 @@ def cmd_line(a):
             (LOOP / "collab").write_text(a.collab.strip() + "\n", encoding="utf-8")
         cmd, src = collab_cmd()
         print(f"协调主机：{' '.join(cmd) if cmd else '未配置'}（来自{src}）。本机代号 {me}。")
+        sc = sync_conf()
+        print(f"汇合：研究分支 {sc['branch']}，本机写 {sc['mine']} → {sc['hub']}。" if sc else
+              "汇合：没设研究分支，按当前分支推拉（rk sync --setup 改为按研究分支汇合）。")
         if cmd:
             out, err = lease_call("show")
             print("连通。" if out is not None else f"连不上：{err}")
@@ -1304,11 +1353,16 @@ def cmd_line(a):
               + (f"；已提交 {c[:8]}" if c else "") + ("" if collab_cmd()[0] else "。没有配置协调主机，推进权只登记在本机；"
                                                      "要跨机器交接先 rk line config --collab \"<命令>\""))
         return
+    conf = sync_conf()
+    if a.action == "take" and conf:  # 先拿到别的机器（上一个推进者）的记录
+        res = sync_now(conf)
+        if not res["ok"]:
+            die(f"接手前要先拿到别的机器的记录，同步没完成：{sync_problem(res)}", EXIT_FAILED)
     if not path.exists():
-        die(f"没有研究线 {a.line}（state/{a.line}.md）。别的机器建的先 git pull；新线用 rk line new。")
+        die(f"没有研究线 {a.line}（state/{a.line}.md）。别的机器建的先 {pull_hint()}；新线用 rk line new。")
     fm, body = read_line(path)
     if a.action == "take":
-        behind, up = behind_upstream()
+        behind, up = (0, None) if conf else behind_upstream()
         if behind:
             die(f"本地落后 {up} {behind} 个提交：先 git pull，拿到上一个推进者的记录再接手。")
         out, err = lease_call("acquire", a.line, holder=me, takeover=a.takeover, evidence=a.evidence,
@@ -1328,7 +1382,7 @@ def cmd_line(a):
             if fm_token(fm) < out["token"]:
                 cache_drop(a.line)
                 die(f"协调主机上 {a.line} 已交给本机（#{out['token']}），仓库里的记录还是 #{fm_token(fm)}："
-                    f"先 git pull 拿到交接记录，再 rk line take {a.line}。")
+                    f"先 {pull_hint()} 拿到交接记录，再 rk line take {a.line}。")
         prev = fm.get("holder") if fm.get("holder") not in (None, "-", me) else ""
         c = stamp_line(a.line, path, body, out, me, out["event"], prev)
         print(f"{a.line}：{out['event']}，推进权 #{out['token']} 归本机（{me}），到 {out['expires']}"
@@ -1369,10 +1423,19 @@ def handoff_summary(line, me, to, token, note, left_runs, body, src):
             f"## 交接说明\n\n{note or '（没写。下面是原始记录，按它们接着做。）'}\n\n"
             f"## 留在原机器上的运行\n\n{runs}\n\n"
             f"## 需要用户决定的事（SUMMARY.md）\n\n{decide}\n\n"
-            f"## 接手步骤\n\n1. `git pull`\n2. `python3 research/tools/rk.py line take {line}`\n"
+            f"## 接手步骤\n\n1. `python3 research/tools/rk.py sync --pull`（没设研究分支时等于 `git pull`）\n"
+            f"2. `python3 research/tools/rk.py line take {line}`\n"
             f"3. `/research:resume {line}`：先读本文件，再读 `state/{line}.md`\n\n"
             f"## 这条线的状态（state/{line}.md 原文）\n\n{state}\n\n"
             f"## 日志末尾（LOG.md 最后 30 行）\n\n{tail(HOME / 'LOG.md', 30)}\n")
+
+
+GIT_REMOTE_ENV = "export GIT_TERMINAL_PROMPT=0 GIT_ALLOW_PROTOCOL=file:git:http:https:ssh GIT_LITERAL_PATHSPECS=1; "
+
+
+def handoff_remote_command(rdir, line):
+    return GIT_REMOTE_ENV + (f"cd {shlex.quote(rdir)} && {{ python3 tools/rk.py sync --pull -q || git pull -q --ff-only; }} && "
+                             f"python3 tools/rk.py line take {shlex.quote(line)}")
 
 
 def cmd_handoff(a):
@@ -1390,6 +1453,8 @@ def cmd_handoff(a):
         die("交接靠 git 搬运记录：研究目录要在 git 仓库里。")
     if collab_cmd()[0] is None:
         die("跨机器交接需要协调主机（两台机器都能连上的那台）：rk line config --collab \"ssh <别名> python3 <目录>/collab.py\"")
+    conf = sync_conf()
+    synced = sync_now(conf) if conf and not a.dry_run else None  # 设了研究分支：先提交研究记录、并入别的机器的
     fm, body = read_line(path)
     cache = cache_read(line)
     resumed = bool(cache) and fm.get("holder") == to and fm.get("from") == me and fm_token(fm) == cache["token"] + 1
@@ -1412,12 +1477,23 @@ def cmd_handoff(a):
     _, st = git(["status", "--porcelain", "--", str(HOME)], root)
     if st:
         problems.append(("研究目录有没提交的改动：" + "；".join(st.splitlines()[:5]),
+                         "rk sync（提交研究记录并汇合）" if conf else
                          f"git add {HOME.relative_to(root) if root in HOME.parents else HOME} && git commit -m \"交接前提交\""))
-    behind, up = behind_upstream()
-    if not up:
-        problems.append(("当前分支没有上游，接手的机器拿不到记录", "git push -u origin <分支>"))
-    elif behind:
-        problems.append((f"落后 {up} {behind} 个提交", "git pull"))
+    if conf:
+        st = synced or sync_status(conf)
+        if synced and not synced["ok"]:
+            problems.append((f"同步没完成：{sync_problem(synced)}", "解决后 rk sync"))
+        elif st.get("current", conf["mine"]) != conf["mine"]:
+            problems.append((f"当前分支是 {st['current']}，不是本机的 {conf['mine']}", "rk sync --setup"))
+        elif st.get("behind"):
+            problems.append((f"落后研究分支 {conf['branch']} {st['behind']} 个提交", "rk sync"))
+    else:
+        behind, up = behind_upstream()
+        if not up:
+            problems.append(("当前分支没有上游，接手的机器拿不到记录",
+                             "git push -u origin <分支>；或 rk sync --setup，按研究分支汇合"))
+        elif behind:
+            problems.append((f"落后 {up} {behind} 个提交", "git pull"))
     left = [rid for rid in run_ids() if load_meta(rid).get("line") == line and state_of(rid)[0] in ("running", "open")]
     if left and not a.leave_runs:
         problems.append((f"这条线还有运行没结束：{', '.join(left)}",
@@ -1429,11 +1505,11 @@ def cmd_handoff(a):
         host, rdir = remote.groups()
         try:
             p = subprocess.run(["ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=15", host,
-                                f"python3 {shlex.quote(rdir.rstrip('/') + '/tools/rk.py')} id"],
+                                GIT_REMOTE_ENV + f"python3 {shlex.quote(rdir.rstrip('/') + '/tools/rk.py')} id"],
                                capture_output=True, text=True, timeout=60)
             m = re.search(r"本机代号：([a-z][a-z0-9]*)", p.stdout)
             if not m:
-                problems.append((f"在 {host} 上没跑通 rk：{(p.stderr or p.stdout).strip()[:200]}",
+                problems.append((f"在 {host} 上没跑通 rk：{redact(p.stderr or p.stdout).strip()[:200]}",
                                  f"确认 {host} 上有这个仓库、研究目录是 {rdir}"))
             elif m.group(1) != to:
                 problems.append((f"{host} 的机器代号是 {m.group(1)}，不是 {to}", f"改用 --to {m.group(1)}"))
@@ -1458,15 +1534,15 @@ def cmd_handoff(a):
         if not commit_paths([path, summ, HOME / "STATE.md"], f"研究线 {line}：交接给 {to}（推进权 #{token}）"):
             die("交接记录没能提交，交接没有进行。")
         print(f"  ✓ 交接摘要 {summ.relative_to(HOME)}，已盖章 #{token} 并提交")
-    try:
-        p = subprocess.run(["git", "push", "-q"], cwd=str(root), capture_output=True, text=True, timeout=180)
-        pushed = p.returncode == 0
-        perr = (p.stderr or "").strip()[:300]
-    except (OSError, subprocess.SubprocessError) as e:
-        pushed, perr = False, str(e)
+    if conf:
+        res = sync_now(conf)
+        pushed, perr = res["integrated"], sync_problem(res)
+    else:
+        rc, _, perr = git_run(["push", "-q"], root)
+        pushed = rc == 0
     if not pushed:
         die(f"推送失败：{perr}。交接记录已在本地提交；网络好了原样重跑这条 rk handoff 命令。", EXIT_FAILED)
-    print("  ✓ 已推送")
+    print(f"  ✓ 已推送（研究分支 {conf['branch']} 已包含交接记录）" if conf else "  ✓ 已推送")
     if not transferred:
         out, err = lease_call("transfer", line, holder=me, token=cache["token"], to=to)
         if out is None or not out.get("ok"):
@@ -1475,22 +1551,762 @@ def cmd_handoff(a):
     print(f"  ✓ 推进权 #{token} 已交给 {to}；本机不再写 state/{line}.md")
     if remote:
         host, rdir = remote.groups()
-        cmd = (f"cd {shlex.quote(rdir)} && git pull -q --ff-only && "
-               f"python3 tools/rk.py line take {shlex.quote(line)}")
+        cmd = handoff_remote_command(rdir, line)
         try:
             p = subprocess.run(["ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=15", host, cmd],
                                capture_output=True, text=True, timeout=180)
             ok = p.returncode == 0
-            msg = (p.stdout + p.stderr).strip()[:300]
+            msg = redact(p.stdout + p.stderr).strip()[:300]
         except (OSError, subprocess.SubprocessError) as e:
             ok, msg = False, str(e)
         print(f"  {'✓' if ok else '✗'} {host} 上接手：{msg}")
         if not ok:
-            print(f"    到 {host} 上手工执行：git pull && python3 research/tools/rk.py line take {line}")
+            print(f"    到 {host} 上手工执行：python3 research/tools/rk.py sync --pull && "
+                  f"python3 research/tools/rk.py line take {line}")
     else:
-        print(f"接手：到 {to} 上执行 git pull && python3 research/tools/rk.py line take {line}，然后 /research:resume {line}")
+        print(f"接手：到 {to} 上执行 python3 research/tools/rk.py sync --pull && python3 research/tools/rk.py line take {line}，"
+              f"然后 /research:resume {line}")
     if not held_lines():
         print("本机已不持有任何研究线：研究循环可以关掉（rk loop off）。在跑的运行照常跑完。")
+
+
+# ---------------------------------------------------------------- sync
+#
+# 每台机器只写自己的分支 sync/<代号>，推到汇合点（git 远程，默认 origin）；并入共同的研究分支
+# research/<简称> 之后再把研究分支快进到本机的提交。谁同步谁汇合，不需要专门合并的机器。
+# 冲突时研究分支不动，本机的 sync 分支照样推上去，别的机器和 Bunsen 看得到这边的记录。
+# 设置存在本仓库的 git config（rk.branch、rk.hub），不入库；没设置时一切照旧按当前分支推拉。
+
+SYNC_STATE = LOOP / "sync.json"
+BRANCH_RE = re.compile(r"^research/[A-Za-z0-9][A-Za-z0-9_.-]{0,39}$")
+
+
+def default_research_branch(name):
+    """与 Bunsen 契约 3.3 一致：只保留 ASCII，简称至多 40 字符。"""
+    slug = re.sub(r"[^A-Za-z0-9_-]+", "-", name)
+    slug = re.sub(r"^[^A-Za-z0-9]+|[^A-Za-z0-9]+$", "", slug)
+    slug = re.sub(r"[^A-Za-z0-9]+$", "", slug[:40])
+    return "research/" + (slug or "main")
+
+
+class SyncTerminated(BaseException):
+    pass
+
+
+_TERMINATING = False
+_OWNED_MERGES = {}
+_CLEANUP_ERRORS = []
+_CLEANUP_NOTICES = []
+_CLEANING = False
+
+
+def terminate_sync(signum, frame):
+    global _TERMINATING
+    _TERMINATING = True
+    for sig in (signal.SIGTERM, signal.SIGHUP, signal.SIGINT):
+        signal.signal(sig, signal.SIG_IGN)
+    raise SyncTerminated()
+
+
+def remove_merge_additions(root, paths):
+    # git 遇到信号时可能已恢复 index，却留下本次 merge 新增的未跟踪文件。
+    # 只移除合并前不存在、且来自输入提交的新增路径；绝不 git clean。
+    errors = []
+    for path in paths:
+        try:
+            path.parent.resolve().relative_to(Path(root))
+            if path.is_symlink() or path.is_file(): path.unlink()
+            elif path.is_dir(): path.rmdir()  # 非空时不递归删除用户内容
+        except (OSError, ValueError) as e:
+            errors.append("无法清理本次合并新增路径：" + str(path))
+    return errors
+
+
+# 监护进程不属于外层执行组，控制管道 EOF（包括 rk 被 KILL）是可靠的清理通知。
+# git 及其传输助手/hook 共用单独进程组；无需 ps/pkill 或主机进程枚举。
+_GIT_GUARD = r'''
+import importlib.util,json,os,select,signal,subprocess,sys
+argv,root,journal,ready=json.loads(sys.argv[1])
+for sig in (signal.SIGTERM,signal.SIGHUP,signal.SIGINT):signal.signal(sig,signal.SIG_IGN)
+env=dict(os.environ)
+p=None;cancel=False;dead_parent=False
+try:
+    def child_group():
+        os.setpgrp()
+        for sig in (signal.SIGTERM,signal.SIGHUP,signal.SIGINT):signal.signal(sig,signal.SIG_DFL)
+    p=subprocess.Popen(argv,cwd=root,env=env,stdin=subprocess.DEVNULL,preexec_fn=child_group)
+    os.write(ready,(str(p.pid)+'\n').encode());os.close(ready)
+    while p.poll() is None:
+        if select.select([0],[],[],.02)[0]:
+            data=os.read(0,1);cancel=True;dead_parent=not data;break
+    code=p.poll()
+finally:
+    if p is not None:
+        # 先让 Git 的信号处理器清掉自己的真实 index.lock，再无条件杀掉整个后代组。
+        try:os.killpg(p.pid,signal.SIGTERM)
+        except ProcessLookupError:pass
+        try:p.wait(timeout=.2)
+        except subprocess.TimeoutExpired:pass
+        try:os.killpg(p.pid,signal.SIGKILL)
+        except ProcessLookupError:pass
+        p.wait()
+    try:os.close(ready)
+    except OSError:pass
+if dead_parent and journal and os.path.isfile(journal):
+    # 只有登记为本次操作且仍有 MERGE_HEAD 时恢复；复用同一套受保护的清理逻辑。
+    spec=importlib.util.spec_from_file_location('rk_recover',sys.argv[2]);m=importlib.util.module_from_spec(spec);spec.loader.exec_module(m)
+    record=json.load(open(journal));m._OWNED_MERGES[record['root']]=record;m.cleanup_owned_merges()
+sys.exit(143 if cancel else (code if code is not None and code>=0 else 128+abs(code or 0)))
+'''
+
+
+def discard_merge(root):
+    record = _OWNED_MERGES.pop(str(Path(root).resolve()), None)
+    if record:
+        shutil.rmtree(record['temp'], ignore_errors=True)
+
+
+def cleanup_owned_merges():
+    global _CLEANING
+    if _CLEANING: return []
+    _CLEANING = True
+    try: return _cleanup_owned_merges()
+    finally: _CLEANING = False
+
+
+def merge_completed(root, record):
+    p = git_capture(['rev-list','--parents','-n','1','HEAD'],root,timeout=2)
+    if p.returncode: return False
+    commit = p.stdout.decode('ascii',errors='replace').split()
+    if record['kind']=='ff': return bool(commit) and commit[0]==record['target']
+    return len(commit)==3 and commit[0]!=record['head'] and commit[1:]==[record['head'],record['target']]
+
+
+def _cleanup_owned_merges():
+    errors = []
+    for root, record in list(_OWNED_MERGES.items()):
+        marker = Path(record['marker'])
+        rc, head = git(['rev-parse','HEAD'],root)
+        if rc:
+            errors.append('回滚本次合并失败：无法检查 HEAD（保留恢复记录：'+record['journal']+'）')
+            continue
+        # G25：HEAD 一旦移动，不管 hook 的退出码如何，都不能再回滚。
+        if head != record['head']:
+            if merge_completed(root,record): _CLEANUP_NOTICES.append('合并已完成；仓库的 git hook 没有在时限内正常结束（已结束它）')
+            else: errors.append('HEAD 已移动，不回滚本次合并；请检查仓库状态')
+            discard_merge(root)
+            continue
+        if marker.exists():
+            try:
+                # 给监护启动留余量，仍短于外层 TERM 的 3 秒宽限。
+                r = git_capture(['merge','--abort'],root,timeout=2)
+                if r.returncode or marker.exists():
+                    errors.append('回滚本次合并失败：'+root+'（保留恢复记录：'+record['journal']+'）')
+                    continue
+                errors.extend(remove_merge_additions(root,[Path(p) for p in record['additions']]))
+            except (OSError,subprocess.SubprocessError):
+                errors.append('回滚本次合并失败：'+root+'（保留恢复记录：'+record['journal']+'）')
+                continue
+        discard_merge(root)
+    return errors
+
+
+def register_merge(root, head, target, kind, marker, base):
+    if base is None or Path(marker).exists(): return None
+    # 已求得共同祖先；两个树参数等价于旧的 head...target，且不会读取索引/工作树。
+    added = git_capture(['diff','--name-only','-z','--no-renames','--diff-filter=A',base,target],root)
+    if added.returncode: return None
+    temp = tempfile.mkdtemp(prefix='rk-merge-')
+    record = {'root':root,'head':head,'target':target,'kind':kind,'marker':str(marker),
+              'temp':temp,'journal':str(Path(temp)/'merge.json'),'trace':str(Path(temp)/'hooks.trace'),
+              'additions':[str(Path(root)/os.fsdecode(p)) for p in added.stdout.split(b'\0') if p and not os.path.lexists(Path(root)/os.fsdecode(p))]}
+    Path(record['journal']).write_text(json.dumps(record),encoding='utf-8')
+    _OWNED_MERGES[root] = record
+    return record
+
+
+def post_hook_failed(record):
+    # Git 本身会忽略 post-commit 的非零退出码；Trace2 才能区分它与正常完成。
+    try:
+        with open(record['trace'],'rb') as f: data=f.read(8*1024*1024)
+    except OSError: return False
+    running=set();failed=False
+    for line in data.splitlines():
+        try:event=json.loads(line)
+        except (ValueError,UnicodeDecodeError):continue
+        key=(event.get('sid'),event.get('child_id'))
+        if event.get('event')=='child_start' and event.get('hook_name') in ('post-merge','post-commit'):running.add(key)
+        elif event.get('event')=='child_exit' and key in running:
+            running.remove(key);failed=failed or event.get('code',0)!=0
+    return failed or bool(running)
+
+
+def merge_branch(root, target, branch, message, timeout=180, paths=None):
+    """G25 唯一合并入口：真实索引、祖先关系分流，按最终 HEAD 判断已完成的合并。"""
+    root = str(Path(root).resolve())
+    def result(p=None, **extra):
+        p = p or subprocess.CompletedProcess(['git','merge'],0,b'',b'')
+        return dict(code=p.returncode,stdout=p.stdout.decode('utf-8','replace').strip(),
+                    stderr=p.stderr.decode('utf-8','replace').strip(),staged=False,hook_warning=None,changed=False,**extra)
+    def capture(args): return git_capture(args,root,timeout=timeout)
+    paths={} if paths is None else paths
+    operation=git_operation(Path(root),paths)
+    if operation: return result(subprocess.CompletedProcess(['git','merge'],1,b'',('有未完成的 git 操作：'+operation).encode()))
+    commits = capture(['rev-parse','HEAD',target+'^{commit}'])
+    if commits.returncode: return result(commits)
+    head,target_id=commits.stdout.decode('ascii').splitlines()
+    ancestor = capture(['merge-base',head,target_id])
+    if ancestor.returncode not in (0,1): return result(ancestor)
+    base=ancestor.stdout.decode('ascii').strip() if ancestor.returncode==0 else None
+    if base==target_id: return result()
+    kind = 'ff' if base==head else 'merge'
+    if kind=='merge':
+        staged = capture(['diff','--cached','--quiet','HEAD'])
+        if staged.returncode:
+            res=result(staged);res['staged']=staged.returncode==1
+            if res['staged']: res['stderr']=f'暂存区有未提交的内容，这次没有并入 {branch}：提交或取消暂存后再执行 rk sync'
+            return res
+    record = register_merge(root,head,target_id,kind,paths['MERGE_HEAD'],base)
+    if record is None: return result(subprocess.CompletedProcess(['git','merge'],1,b'',b'refusing unowned merge state'))
+    args = ['merge','--ff-only',target_id] if kind=='ff' else ['merge','--no-commit','--no-edit','-m',message,target_id]
+    p = capture(args)
+    completed=merge_completed(root,record)
+    if not completed and not p.returncode and kind=='merge' and Path(record['marker']).exists():
+        p = capture(['commit','-q','--no-edit'])
+        completed=merge_completed(root,record)
+    if completed:
+        res=result(p);res['code']=0;res['changed']=True
+        if p.returncode or post_hook_failed(record): res['hook_warning']='仓库的 git hook 没有在时限内正常结束（已结束它）'
+        discard_merge(root)
+        return res
+    # 预检拒绝没有 MERGE_HEAD：只注销，不 reset、不碰任何 index.lock。
+    if not Path(record['marker']).exists(): discard_merge(root)
+    if not p.returncode: p=subprocess.CompletedProcess(p.args,1,p.stdout,'合并没有达到预期的 HEAD 状态；保留当前状态，不回滚'.encode())
+    return result(p)
+
+
+# 只允许已审计的纯读模式直执行；未知子命令/模式一律保留 EOF 监护。
+_READ_ONLY_GIT = {
+    'rev-parse':frozenset(('--show-toplevel','--abbrev-ref','--symbolic-full-name','--verify','-q','--quiet',
+                           '--git-dir','--git-common-dir','--show-prefix','--show-cdup','--is-inside-work-tree','--is-bare-repository')),
+    'merge-base':frozenset(('--is-ancestor','--all','--octopus','--independent','--fork-point')),
+    'rev-list':frozenset(('--parents','--count','--left-right','--objects','--all','--reflog')),
+    'show-ref':frozenset(('--head','--heads','--tags','--verify','--quiet','-q','--hash','--dereference','-d')),
+    'for-each-ref':frozenset(('--format=%(refname)',)),
+}
+_READ_GIT_VALUES = {'rev-parse':frozenset(('--git-path',)), 'rev-list':frozenset(('-n',))}
+_CONFIG_READ = {'--get':1,'--get-all':1,'--get-regexp':1,'--get-urlmatch':2,'--list':0}
+
+def direct_git_read(args):
+    if not args: return False
+    command, tail = args[0], list(args[1:])
+    # :path / :stage:path 是读真实索引的对象语法，也可能启动 fsmonitor。
+    if command in ('rev-parse','rev-list','merge-base','cat-file') and any(arg.startswith(':') for arg in tail): return False
+    if command in _READ_ONLY_GIT:
+        # 子命令也按显式选项白名单匹配：如 rev-parse --shared-index-path、
+        # rev-list --indexed-objects 会读索引并触发 fsmonitor，不能直执行。
+        while tail:
+            arg=tail.pop(0)
+            if arg in _READ_GIT_VALUES.get(command,()):
+                if not tail or tail.pop(0).startswith('-'): return False
+            elif arg.startswith('-') and arg not in _READ_ONLY_GIT[command]: return False
+        return True
+    if command=='cat-file':
+        # --filters/--textconv 可运行用户程序，不在白名单中。
+        return len(tail)==2 and tail[0] in ('-e','-p','-s','-t') and not tail[1].startswith('-')
+    if command=='symbolic-ref':
+        while tail and tail[0] in ('-q','--quiet','--short','--no-recurse'): tail.pop(0)
+        return len(tail)==1 and not tail[0].startswith('-')
+    if command=='config':
+        while tail and tail[0] in ('--local','--global','--system','--includes','--no-includes'): tail.pop(0)
+        return bool(tail) and tail[0] in _CONFIG_READ and len(tail)==1+_CONFIG_READ[tail[0]] and all(not x.startswith('-') for x in tail[1:])
+    if command=='diff':
+        # 工作树及 --cached 都会调用 fsmonitor；只放行两个完整对象 ID 的树对树比较。
+        flags={'--name-only','--quiet','-z','--no-renames','--diff-filter=A','--no-ext-diff','--no-textconv'}
+        revisions=[]
+        for arg in tail:
+            if arg in flags: continue
+            if len(arg) not in (40,64) or any(c not in '0123456789abcdef' for c in arg): return False
+            revisions.append(arg)
+        return len(revisions)==2 and any(x in tail for x in ('--name-only','--quiet'))
+    return False
+
+
+def select_ready(fd, timeout):
+    with selectors.DefaultSelector() as selector:
+        selector.register(fd,selectors.EVENT_READ)
+        return bool(selector.select(timeout))
+
+
+def git_capture(args, root, timeout=180):
+    """共享有界读取；纯读直执行，其余保留控制管道/EOF 监护和独立 git 组。"""
+    args = list(args)
+    if args and args[0]=='diff': args[1:1]=['--no-ext-diff','--no-textconv']
+    guarded = not direct_git_read(args)
+    root = str(Path(root).resolve()); argv = ['git', *args]
+    record = _OWNED_MERGES.get(root)
+    journal = record['journal'] if record and Path(record['journal']).exists() else None
+    # 恢复事务仍须有 EOF 接力：外层在宽限后 KILL rk 时，读 HEAD 的监护也能接手 journal。
+    # 正常读操作不需要监护；这里只保留修复前的恢复路径保护。
+    guarded = guarded or (record is not None and _CLEANING)
+    p = None; git_pid = None; ready = None; completed = False; direct_stopped = False; out, err = bytearray(), bytearray()
+    def stop_group():
+        nonlocal direct_stopped
+        if p is None: return
+        if not guarded:
+            if direct_stopped: return
+            direct_stopped=True
+            # 白名单禁止运行用户程序；仍杀整个组，并回收直接子进程。
+            # 异常路径不能先 poll/reap 组长：组长可能已退出、后代还持有输出管道。
+            if not completed:
+                try:os.killpg(p.pid,signal.SIGKILL)
+                except ProcessLookupError:pass
+            p.wait()
+            return
+        if p.stdin and not p.stdin.closed:
+            try:p.stdin.write(b'K');p.stdin.flush()
+            except (BrokenPipeError,OSError):pass
+            try:p.stdin.close()
+            except OSError:pass
+        try:p.wait(timeout=1)
+        except subprocess.TimeoutExpired:
+            if git_pid:
+                try:os.killpg(git_pid,signal.SIGKILL)
+                except ProcessLookupError:pass
+            p.kill();p.wait(timeout=1)
+    try:
+        deadline = time.monotonic()+timeout
+        env=git_env()
+        if record: env['GIT_TRACE2_EVENT']=record['trace']
+        if not guarded:
+            # 避免部分克隆的纯读操作隐式运行取对象的传输助手。
+            env['GIT_NO_LAZY_FETCH']='1'
+            p=subprocess.Popen(argv,cwd=root,stdin=subprocess.DEVNULL,stdout=subprocess.PIPE,stderr=subprocess.PIPE,
+                               env=env,start_new_session=True)
+            git_pid=p.pid
+        else:
+            ready, writer = os.pipe()
+            try:
+                p = subprocess.Popen([sys.executable,'-B','-c',_GIT_GUARD,json.dumps([argv,root,journal,writer]),str(Path(__file__).resolve())],
+                    stdin=subprocess.PIPE,stdout=subprocess.PIPE,stderr=subprocess.PIPE,env=env,
+                    start_new_session=True,pass_fds=(writer,))
+            finally:os.close(writer)
+            if not select_ready(ready, max(0,deadline-time.monotonic())):raise subprocess.TimeoutExpired(argv,timeout)
+            data = os.read(ready,32);os.close(ready);ready=None
+            if data.strip():git_pid=int(data)
+        with selectors.DefaultSelector() as sel:
+            sel.register(p.stdout,selectors.EVENT_READ,out);sel.register(p.stderr,selectors.EVENT_READ,err)
+            while sel.get_map():
+                left=deadline-time.monotonic()
+                if left<=0:raise subprocess.TimeoutExpired(argv,timeout)
+                for key,_ in sel.select(left):
+                    data=os.read(key.fd,65536)
+                    if not data:sel.unregister(key.fileobj)
+                    elif len(key.data)+len(data)>8*1024*1024:
+                        stop_group()
+                        return subprocess.CompletedProcess(argv,125,b'',b'git output exceeds 8 MiB limit')
+                    else:key.data.extend(data)
+            rc=p.wait(timeout=max(0,deadline-time.monotonic()))
+        completed=True
+        return subprocess.CompletedProcess(argv,rc if rc>=0 else 128+abs(rc),bytes(out),bytes(err))
+    except subprocess.TimeoutExpired:
+        stop_group()
+        return subprocess.CompletedProcess(argv,124,b'',f'git {args[0]} 超过 {timeout} 秒没有完成'.encode())
+    except OSError as e:
+        return subprocess.CompletedProcess(argv,127,b'',str(e).encode('utf-8',errors='replace'))
+    finally:
+        stop_group()
+        if ready is not None:os.close(ready)
+        if p is not None:p.stdout.close();p.stderr.close()
+        if _TERMINATING and not _CLEANING:
+            _CLEANUP_ERRORS.extend(cleanup_owned_merges())
+
+
+def git_run(args, root, timeout=180):
+    # 兼容工具内原有调用；同步的两个合并点直接共享 merge_branch 的结构化结果。
+    if args[0]=='merge' and '--abort' not in args:
+        target=args[-1];message=args[args.index('-m')+1] if '-m' in args else 'rk sync：并入 '+target
+        res=merge_branch(root,target,target,message,timeout)
+        return res['code'],res['stdout'],res['stderr']
+    p=git_capture(args,root,timeout)
+    return p.returncode,p.stdout.decode('utf-8',errors='replace').strip(),p.stderr.decode('utf-8',errors='replace').strip()
+
+
+def valid_remote(hub):
+    return (bool(hub) and not hub.startswith("-") and not any(c.isspace() or ord(c) < 32 or ord(c) == 127 for c in hub)
+            and not any(c in hub for c in "~^:?*[\\") and ".." not in hub and not hub.endswith(("/", ".", ".lock")))
+
+
+def git_operation(root, paths=None):
+    """一次 --git-path 查询兼容普通/linked worktree；缓存路径而非操作状态。"""
+    root=Path(root)
+    names=('MERGE_HEAD','rebase-merge','rebase-apply','CHERRY_PICK_HEAD')
+    paths = {} if paths is None else paths
+    if not all(name in paths for name in names):
+        rc,out=git(['rev-parse',*(arg for name in names for arg in ('--git-path',name))],root)
+        resolved=out.splitlines()
+        if rc or len(resolved)!=len(names): return '无法检查 git 操作状态'
+        paths.update((name,root/path) for name,path in zip(names,resolved))
+    for name in names:
+        if paths[name].exists(): return name
+    return None
+
+
+def abort_merge(root):
+    key = str(Path(root).resolve());record = _OWNED_MERGES.get(key)
+    if not record:
+        rc, marker = git(['rev-parse','--git-path','MERGE_HEAD'],root)
+        if rc or (Path(root)/marker).exists():
+            return "回滚本次合并失败：未登记本次合并，不操作用户的合并状态"
+        return None  # 预检拒绝：没有合并需要取消，保留原始 git 错误。
+    if not Path(record['marker']).exists():
+        discard_merge(key)
+        return None
+    errors = cleanup_owned_merges()
+    return '；'.join(errors) if errors else None
+
+
+def git_error_summary(text):
+    # 与 Bunsen 的 G22 摘要保持同一套规则；先脱敏再按字符截断。
+    boilerplate = {"Please make sure you have the correct access rights", "and the repository exists."}
+    lines = [line.strip() for line in (text or "").splitlines() if line.strip() and line.strip() not in boilerplate]
+    return redact("；".join(lines[-3:]) if lines else "没有输出")[:300]
+
+
+def last_line(text):
+    return git_error_summary(text)
+
+
+def ref_exists(root, ref):
+    return git(["rev-parse", "-q", "--verify", ref + "^{commit}"], root)[0] == 0
+
+
+def is_ancestor(root, a, b):
+    return git(["merge-base", "--is-ancestor", a, b], root)[0] == 0
+
+
+def rev_count(root, rng):
+    rc, n = git(["rev-list", "--count", rng], root)
+    return int(n) if rc == 0 and n.isdigit() else 0
+
+
+def sync_conf():
+    """本仓库的汇合设置 → dict；没设研究分支时返回 None。"""
+    root = repo_root(HOME)
+    if not root:
+        return None
+    rc, branch = git(["config", "--get", "rk.branch"], root)
+    if rc != 0 or not branch:
+        return None
+    hub = git(["config", "--get", "rk.hub"], root)[1] or "origin"
+    return {"root": root, "hub": hub, "branch": branch, "mine": f"sync/{machine_name()[0]}",
+            "rel": os.path.relpath(HOME, root)}
+
+
+def pull_hint():
+    return "rk sync" if sync_conf() else "git pull"
+
+
+def _sync_once(conf, commit=True):
+    root, hub, branch, mine, rel = conf["root"], conf["hub"], conf["branch"], conf["mine"], conf["rel"]
+    up = f"refs/remotes/{hub}/{branch}"
+    res = {"at": now(), "machine": machine_name()[0], "hub": hub, "branch": branch, "mine": mine,
+           "committed": None, "merged": False, "pushed": False, "integrated": False, "conflict": [],
+           "offline": False, "error": None, "hook_warning": None}
+
+    def done(err=None):
+        res["error"] = redact(err) if err else err
+        rc, refs = git(['rev-parse','HEAD',up+'^{commit}'],root)
+        refs = refs.splitlines()
+        res['head'] = refs[0] if refs else ''
+        known = rc==0 and len(refs)==2
+        counts = git(['rev-list','--left-right','--count',f'{up}...HEAD'],root) if known else (1,'')
+        pair=counts[1].split()
+        behind,ahead = (map(int,pair) if counts[0]==0 and len(pair)==2 and all(x.isdigit() for x in pair) else (0,0))
+        res['ahead'] = ahead if known else None
+        res['behind'] = behind if known else None
+        res["ok"] = err is None and not res["conflict"]
+        try:
+            LOOP.mkdir(parents=True, exist_ok=True)
+            write_json(SYNC_STATE, res)
+        except OSError:
+            pass
+        return res
+
+    if not valid_remote(hub):
+        return done(f"汇合点远程名不合规：{hub!r}（不能以 - 开头、含空白或非法 ref 字符）")
+    paths={}
+    operation = git_operation(root,paths)
+    if operation:
+        return done(f"有未完成的 git 操作（{operation}）：先完成或手工取消，再 rk sync")
+    cur = git(["rev-parse", "--abbrev-ref", "HEAD"], root)[1]
+    if cur != mine:
+        return done(f"当前分支是 {cur}，不是本机的 {mine}：rk sync --setup")
+    if commit:
+        rc, out, err = git_run(["add", "-A", "--", rel], root)
+        if rc != 0:
+            return done(f"暂存研究记录失败：{last_line(err or out)}")
+        rc, out, err = git_run(["diff", "--cached", "--quiet", "--", rel], root)
+        if rc not in (0, 1):
+            return done(f"检查暂存研究记录失败：{last_line(err or out)}")
+        if rc == 1:
+            rc, out, err = git_run(["commit", "-q", "-m", f"rk sync：{res['machine']} 的研究记录", "--", rel], root)
+            if rc != 0:
+                return done(f"提交研究记录失败：{last_line(err or out)}")
+            res["committed"] = git(["rev-parse", "HEAD"], root)[1]
+    for _ in range(3):
+        rc, _, err = git_run(["fetch", "-q", "--", hub], root, timeout=120)
+        if rc != 0:
+            res["offline"] = True
+            return done(f"取不到汇合点 {hub}：{last_line(err)}。记录留在本机，网络好了再同步")
+        merge_error = None
+        if ref_exists(root, up):
+            merged = merge_branch(root,up,branch,f"rk sync：{mine} 并入 {branch}",paths=paths)
+            if merged['code']==0:
+                res['merged'] = merged['changed'] or res['merged']
+                res['hook_warning'] = merged['hook_warning'] or res['hook_warning']
+            elif merged['staged']:
+                merge_error = merged['stderr']
+            else:
+                files = git(["diff","--name-only","--diff-filter=U"],root)[1]
+                abort_error = abort_merge(root)
+                if abort_error: return done(abort_error)
+                if not files: return done(f"并入 {branch} 失败：{last_line(merged['stderr'] or merged['stdout'])}")
+                res['conflict'] = files.splitlines()
+        rc, _, err = git_run(["push", "-q", "--", hub, f"HEAD:refs/heads/{mine}"], root)
+        if rc != 0:
+            why = last_line(err)
+            if "rejected" in err or "fetch first" in err:
+                why += f"（汇合点上的 {mine} 有本机没有的提交：两台机器用了同一个代号？用 rk id 核对）"
+            return done(f"推送 {mine} 失败：{why}")
+        res["pushed"] = True
+        if res["conflict"]: return done()
+        if merge_error: return done(merge_error)
+        rc, _, err = git_run(["push", "-q", "--", hub, f"HEAD:refs/heads/{branch}"], root)
+        if rc == 0:
+            res["integrated"] = True
+            rc, _, err = git_run(["fetch", "-q", "--", hub], root, timeout=60)
+            return done(None if rc == 0 else f"推送完成，但更新汇合点状态失败：{last_line(err)}")
+        if "rejected" not in err and "fetch first" not in err:
+            return done(f"推送 {branch} 失败：{last_line(err)}")
+        # 别的机器刚推了研究分支：再取一次、并入、重推
+    return done(f"{branch} 一直在被别的机器更新，三次都没推上；稍后再 rk sync")
+
+
+def sync_queue(operation, background=False):
+    """持锁循环消费；解锁后再检查，封住最后一次检查与解锁之间的唤醒窗口。"""
+    import fcntl
+    LOOP.mkdir(parents=True, exist_ok=True)
+    again = LOOP / "sync.again"
+    again.touch()
+    result = None
+    first = True
+    while True:
+        with open(LOOP / "sync.lock", "a") as lk:
+            try:
+                flags = fcntl.LOCK_EX | (fcntl.LOCK_NB if background or not first else 0)
+                fcntl.flock(lk, flags)
+            except BlockingIOError:
+                # 标记留给持锁者；它也会在解锁后重新检查。
+                return result
+            while (first and not background) or again.exists():
+                again.unlink(missing_ok=True)
+                try:
+                    result = operation()
+                finally:
+                    if _TERMINATING:
+                        _CLEANUP_ERRORS.extend(cleanup_owned_merges())
+                first = False
+        first = False
+        if not again.exists():
+            return result
+
+
+def sync_now(conf, commit=True):
+    return sync_queue(lambda: _sync_once(conf, commit))
+
+
+def sync_bg_child(conf):
+    return sync_queue(lambda: _sync_once(conf), background=True)
+
+
+def autosync():
+    """改了研究记录的 rk 命令之后在后台同步（设了研究分支、且没有 RK_NO_AUTOSYNC 时）。"""
+    if os.environ.get("RK_NO_AUTOSYNC"):
+        return
+    try:
+        conf = sync_conf()
+    except SystemExit:
+        return
+    if not conf:
+        return
+    subprocess.Popen([sys.executable, str(Path(__file__).resolve()), "sync", "--bg-child"], cwd=str(HOME),
+                     stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                     start_new_session=True, env=dict(os.environ, RESEARCH_HOME=str(HOME)))
+
+
+def sync_problem(res):
+    if res.get("error"):
+        return res["error"]
+    if res.get("conflict"):
+        return (f"并入 {res['branch']} 时冲突：{'、'.join(res['conflict'][:5])}。本机的 {res['mine']} 已推上汇合点；"
+                f"git merge {res['hub']}/{res['branch']}，解决冲突并提交后再 rk sync")
+    return res.get("error") or ""
+
+
+def print_sync(res):
+    print(f"同步：{res['mine']} → {res['hub']}（研究分支 {res['branch']}）")
+    if res.get("committed"):
+        print(f"  ✓ 提交了研究记录 {res['committed'][:8]}")
+    if res.get("merged"):
+        print(f"  ✓ 并入了 {res['branch']} 上别的机器的记录")
+    if res.get("pushed"):
+        print(f"  ✓ 推送 {res['mine']}")
+    if res.get("integrated"):
+        print(f"  ✓ {res['branch']} 已包含本机的全部记录")
+    if not res["ok"]:
+        print(f"  ✗ {sync_problem(res)}")
+
+    if res.get("hook_warning"): print("  ! " + res["hook_warning"])
+
+def sync_setup(a):
+    first = True
+
+    def operation():
+        nonlocal first
+        if first:
+            result = _sync_setup_locked(a)
+            first = False
+            return result
+        return _sync_once(sync_conf())
+
+    return sync_queue(operation)
+
+
+def _sync_setup_locked(a):
+    root = repo_root(HOME)
+    if not root:
+        die("汇合靠 git：研究目录要在 git 仓库里。")
+    paths={}
+    operation = git_operation(root,paths)
+    if operation:
+        die(f"有未完成的 git 操作（{operation}）：先完成或手工取消，再 rk sync --setup", EXIT_FAILED)
+    hub = a.hub or git(["config", "--get", "rk.hub"], root)[1] or "origin"
+    if not valid_remote(hub):
+        die(f"汇合点远程名不合规：{hub!r}（不能以 - 开头、含空白或非法 ref 字符）")
+    rc, url = git(["config", "--get", f"remote.{hub}.url"], root)
+    if rc != 0 or not url:
+        die(f"没有名为 {hub} 的远程仓库：git remote add {hub} <汇合点地址>")
+    rc, _, err = git_run(["fetch", "-q", "--", hub], root, timeout=120)
+    if rc != 0:
+        die(f"取不到汇合点 {hub}：{last_line(err)}", EXIT_FAILED)
+    branch = a.branch or git(["config", "--get", "rk.branch"], root)[1]
+    if not branch:
+        refs = git(["for-each-ref", "--format=%(refname)", f"refs/remotes/{hub}/research/"], root)[1]
+        cands = [r[len(f"refs/remotes/{hub}/"):] for r in refs.splitlines() if r]
+        branch = cands[0] if len(cands) == 1 else default_research_branch(root.name)
+    if not BRANCH_RE.fullmatch(branch) or ".." in branch or branch.endswith((".", ".lock")):
+        die(f"研究分支写成 research/<简称>（ASCII 字母数字开头，只含 ASCII 字母数字、_、.、-，简称最多 40 个字符，不能含 .. 或以 .、.lock 结尾）：{branch}")
+    mine = f"sync/{machine_name()[0]}"
+    cur = git(["rev-parse", "--abbrev-ref", "HEAD"], root)[1]
+    if cur == "HEAD":
+        die("当前不在任何分支上：先 git checkout <分支>")
+
+    hook_warnings = []
+    def merge_in(ref, what):
+        if ref_exists(root,ref):
+            merged=merge_branch(root,ref,what,f"rk sync：{mine} 并入{what}",paths=paths)
+            if merged['code']:
+                abort_error=abort_merge(root)
+                if abort_error: die(abort_error,EXIT_FAILED)
+                if merged['staged']:
+                    rc,out,err=git_run(['push','-q','--',hub,f'HEAD:refs/heads/{mine}'],root)
+                    if rc: die(merged['stderr']+'；推送本机分支失败：'+last_line(err or out),EXIT_FAILED)
+                    die(merged['stderr'],EXIT_FAILED)
+                die(f"并入{what}失败：{last_line(merged['stderr'] or merged['stdout'])}。解决后重跑 rk sync --setup",EXIT_FAILED)
+            if merged['hook_warning']: hook_warnings.append(merged['hook_warning'])
+
+    if cur != mine:
+        exists = ref_exists(root, f"refs/heads/{mine}")
+        rc, out, err = git_run(["checkout", "-q", mine] if exists else ["checkout", "-q", "-b", mine], root)
+        if rc != 0:
+            die(f"切到 {mine} 失败：{last_line(err or out)}。先提交或暂存手头的改动。", EXIT_FAILED)
+        if exists:
+            merge_in(cur, cur)
+    merge_in(f"refs/remotes/{hub}/{mine}", mine)  # 例如重新克隆之后
+    for k, v in (("rk.hub", hub), ("rk.branch", branch), (f"branch.{mine}.remote", hub),
+                 (f"branch.{mine}.merge", f"refs/heads/{mine}")):
+        rc, out, err = git_run(["config", k, v], root)
+        if rc != 0:
+            die(f"写入 git 配置 {k} 失败：{last_line(err or out)}", EXIT_FAILED)
+    res = _sync_once(sync_conf())
+    if hook_warnings: res['hook_warning']='；'.join(hook_warnings+[res['hook_warning']] if res.get('hook_warning') else hook_warnings)
+    res["hub_url"] = url
+    res["previous"] = cur
+    return res
+
+
+def sync_status(conf):
+    root, hub, branch = conf["root"], conf["hub"], conf["branch"]
+    try:
+        last = json.loads(SYNC_STATE.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        last = None
+    up = f"refs/remotes/{hub}/{branch}"
+    known = ref_exists(root, up)
+    pending = [ln for ln in git(["status", "--porcelain", "--", conf["rel"]], root)[1].splitlines() if ln]
+    return {"machine": machine_name()[0], "hub": hub, "hub_url": git(["config", "--get", f"remote.{hub}.url"], root)[1],
+            "branch": branch, "mine": conf["mine"], "current": git(["rev-parse", "--abbrev-ref", "HEAD"], root)[1],
+            "head": git(["rev-parse", "HEAD"], root)[1], "uncommitted": len(pending),
+            "ahead": rev_count(root, f"{up}..HEAD") if known else None,
+            "behind": rev_count(root, f"HEAD..{up}") if known else None, "last": last}
+
+
+def cmd_sync(a):
+    if a.setup:
+        res = sync_setup(a)
+    else:
+        conf = sync_conf()
+        if a.bg_child:
+            if conf:
+                sync_bg_child(conf)
+            return
+        if not conf:
+            if a.status:
+                out = {"configured": False, "machine": machine_name()[0]}
+                print(json.dumps(out, ensure_ascii=False) if a.json else
+                      "本仓库还没设研究分支：rk sync --setup [--branch research/<简称>] [--hub origin]")
+                return
+            if a.pull:
+                root = repo_root(HOME)
+                if not root:
+                    die("研究目录不在 git 仓库里。")
+                rc, out, err = git_run(["pull", "-q", "--ff-only"], root)
+                if rc != 0:
+                    die(f"git pull 失败：{last_line(err or out)}", EXIT_FAILED)
+                if not a.quiet:
+                    print("已拉取（本仓库没设研究分支，按当前分支的上游拉取）")
+                return
+            die("本仓库还没设研究分支：rk sync --setup [--branch research/<简称>] [--hub origin]")
+        if a.status:
+            st = sync_status(conf)
+            if a.json:
+                print(json.dumps(dict(st, configured=True), ensure_ascii=False))
+                return
+            last = st["last"] or {}
+            print(f"本机 {st['mine']} → {st['hub']}（{st['hub_url']}），研究分支 {st['branch']}")
+            if st["current"] != st["mine"]:
+                print(f"  ✗ 当前分支是 {st['current']}：rk sync --setup")
+            print(f"  没提交的研究记录 {st['uncommitted']} 个；比研究分支多 {st['ahead']} 个提交、少 {st['behind']} 个"
+                  "（按上次取到的汇合点）")
+            print(f"  上次同步 {last.get('at', '没有')}：" + ("完成" if last.get("ok") else sync_problem(last) or "-"))
+            return
+        res = sync_now(conf)
+    if a.json:
+        print(json.dumps(res, ensure_ascii=False))
+    elif not a.quiet or not res["ok"]:
+        print_sync(res)
+    sys.exit(EXIT_OK if res["ok"] else EXIT_FAILED)
 
 
 # ---------------------------------------------------------------- loop
@@ -1527,8 +2343,13 @@ def cmd_unblock(_a):
     print("已解除“在等用户”。")
 
 
+class SafeArgumentParser(argparse.ArgumentParser):
+    def _print_message(self, message, file=None):
+        super()._print_message(redact(message) if message else message, file)
+
+
 def main():
-    ap = argparse.ArgumentParser(prog="rk", description="research kit")
+    ap = SafeArgumentParser(prog="rk", description="research kit")
     sub = ap.add_subparsers(dest="command", required=True)
 
     p = sub.add_parser("id", help="本机代号；给出简称时生成下一个运行 ID")
@@ -1603,6 +2424,17 @@ def main():
     p.add_argument("--dry-run", action="store_true", help="只做前置检查")
     p.set_defaults(fn=cmd_handoff)
 
+    p = sub.add_parser("sync", help="提交研究记录，经汇合点与别的机器汇合（本机分支 sync/<代号>，共同的研究分支 research/<简称>）")
+    p.add_argument("--setup", action="store_true", help="设定汇合点与研究分支，切到本机的 sync 分支，然后同步一次")
+    p.add_argument("--hub", help="setup：汇合点的远程名（默认 origin）")
+    p.add_argument("--branch", help="setup：研究分支 research/<简称>（默认取汇合点上唯一的那个，否则按仓库目录名）")
+    p.add_argument("--status", action="store_true", help="只看现状，不连网")
+    p.add_argument("--pull", action="store_true", help="接手前拿到别的机器的记录：设了研究分支时同步，否则 git pull")
+    p.add_argument("--json", action="store_true")
+    p.add_argument("-q", "--quiet", action="store_true")
+    p.add_argument("--bg-child", action="store_true", help=argparse.SUPPRESS)
+    p.set_defaults(fn=cmd_sync)
+
     p = sub.add_parser("check", help="核验记录")
     p.set_defaults(fn=cmd_check)
 
@@ -1625,7 +2457,22 @@ def main():
     a = ap.parse_args(argv)
     a.cmd = tail
     a.fn(a)
+    # 改了研究记录的命令：设了研究分支时在后台提交并同步
+    if (a.command in ("run", "_supervise", "done")
+            or (a.command == "audit" and a.action == "record")
+            or (a.command == "line" and a.action in ("new", "take", "release"))):
+        autosync()
 
 
 if __name__ == "__main__":
-    main()
+    for sig in (signal.SIGTERM, signal.SIGHUP, signal.SIGINT):
+        signal.signal(sig, terminate_sync)
+    try:
+        main()
+    except SyncTerminated:
+        errors = _CLEANUP_ERRORS + cleanup_owned_merges()
+        message = "；".join(errors or (_CLEANUP_NOTICES + ["同步已取消，已停止 git 并清理本次合并"]))
+        try: write_json(SYNC_STATE, {"ok": False, "error": message})
+        except OSError: pass
+        print(json.dumps({"ok": False, "error": message}, ensure_ascii=False) if "--json" in sys.argv else message)
+        sys.exit(143)

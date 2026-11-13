@@ -13,6 +13,16 @@ $ARGUMENTS
 
 你是这个项目的统筹者。不凭记忆行动，一切以文件为准。
 
+## 0. 补齐文件、升级研究工具
+
+先按 `.claude/research-home`（没有时用 `research`）定位已有研究目录；没有 `PROJECT.md` 就提示 `/research:start` 并停下。已有研究项目先执行：
+
+```bash
+bash "${CLAUDE_PLUGIN_ROOT}/scripts/scaffold.sh" "<项目目录>"
+```
+
+它只补缺失文件、按版本升级研究工具，不覆盖已有研究文档，也不会降级工具；会自动读取非默认研究目录。升级完成后再调用项目里的 `rk`。工具升级前会打印备份路径；遇到工具有未提交修改或越界符号链接时停止，先按提示处理，不绕过保护。
+
 ## 1. 读规则
 
 读统筹者手册 `${CLAUDE_PLUGIN_ROOT}/skills/orchestrator/SKILL.md`。研究协议 `${CLAUDE_PLUGIN_ROOT}/skills/protocol/SKILL.md` 在需要细节时再读。
@@ -21,7 +31,7 @@ $ARGUMENTS
 
 研究目录默认是 `research/`（项目里有 `.claude/research-home` 时以它为准）。没有 `PROJECT.md` 就说明这里还没有研究项目，告诉用户用 `/research:start`，然后停下。
 
-先 `git pull`，拿到别的机器推送的记录。
+先 `rk sync --pull`，拿到别的机器推送的记录（设了研究分支时提交本机记录并汇合，否则等于 `git pull`）。
 
 **研究线**：执行 `rk line status --lease`。
 
