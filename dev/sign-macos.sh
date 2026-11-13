@@ -20,6 +20,10 @@ if [ -z "$identity" ]; then
   echo "钥匙串里没有 Developer ID Application 证书（见本脚本开头的说明）。" >&2
   exit 1
 fi
+if [ "${SKIP_NOTARIZE:-}" != "1" ] && ! xcrun notarytool history --keychain-profile "$profile" >/dev/null 2>&1; then
+  echo "钥匙串里找不到公证凭据 $profile（或密码已失效），先按本脚本开头的说明重新保存。" >&2
+  exit 1
+fi
 if [ "$(git rev-parse HEAD)" != "$(git rev-parse "$tag^{commit}")" ]; then
   echo "当前检出的不是 $tag：先 git checkout $tag，保证签的是这个版本的代码。" >&2
   exit 1
