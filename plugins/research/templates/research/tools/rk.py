@@ -1,12 +1,15 @@
 #!/usr/bin/env python3
 """rk — research kit：研究循环里应当由机器保证的那部分。
 
+    rk id [简称]                               本机代号；给出简称时生成下一个运行 ID（日期-代号-rNN-简称）
     rk run <运行ID> (--prereg 文件... | --explore) [--manual] [--allow-dirty] -- <入口命令>
     rk wait [运行ID...] [--interval 分钟]      阻塞到全部结束或到状态间隔（后台运行，靠退出通知唤醒）
     rk done <运行ID> [--fail] [--note 说明]    结束一条手工批次（文献、推导等没有进程的工作）
     rk pull <别名>:<远程研究目录> <运行ID...>  把远程主机上已结束的运行记录（含日志）拉回本机
     rk status [--write] [--json]               所有运行的真实状态；--write 重新生成 RUNS.md
-    rk check                                   核验记录：数字可追溯、预登记早于启动、结论有证据与审计、账本只追加
+    rk audit record --runs <ID,...> --verdict <总评> [--report 文件]   登记一次独立审计（结构化，rk check 据此判断）
+    rk audit show [运行ID...]                  每条运行当前有效的审计总评
+    rk check                                   核验记录：数字可追溯、预登记在先、结论有证据与审计、账本只追加
     rk loop on|off|status                      研究循环开关（Stop 钩子据此判断）
     rk block <要用户决定的事> | rk unblock      登记/解除“在等用户”
 
@@ -33,7 +36,18 @@ from pathlib import Path
 HOME = Path(os.environ.get("RESEARCH_HOME") or Path(__file__).resolve().parent.parent).resolve()
 RUNS = HOME / "runs"
 LOOP = HOME / ".loop"
-RUN_ID_RE = re.compile(r"^\d{8}-r\d{2,}-[\w.-]+$")
+# 运行 ID：日期-机器代号-rNN-简称。代号让两台机器各自编号也不会撞号，合并时不冲突。
+# 不带代号的旧格式（日期-rNN-简称）只用于识别已有记录，新运行必须带代号。
+NEW_ID_RE = re.compile(r"^(?P<date>\d{8})-(?P<machine>(?!r\d+-)[a-z][a-z0-9]{1,11})-r(?P<n>\d{2,})-(?P<name>[\w.-]+)$")
+OLD_ID_RE = re.compile(r"^\d{8}-r\d{2,}-[\w.-]+$")
+MACHINE_NAME_RE = re.compile(r"^(?!r\d+$)[a-z][a-z0-9]{1,11}$")
+NAME_RE = re.compile(r"^[\w.-]+$")
+VERDICTS = ("可采信", "需退回", "不可采信")
+SEVERITY = {v: i for i, v in enumerate(VERDICTS)}
+
+
+def valid_run_id(rid):
+    return bool(NEW_ID_RE.match(rid) or OLD_ID_RE.match(rid))
 EXIT_OK, EXIT_FAILED, EXIT_USAGE, EXIT_TICK = 0, 1, 2, 3
 
 
@@ -89,6 +103,58 @@ def machine_id():
                 raw = ""
         _MACHINE = sha256_bytes(raw.encode())[:16] if raw else "host:" + socket.gethostname()
     return _MACHINE
+
+
+_NAME = None
+
+
+def machine_name():
+    """运行 ID 里的机器代号 → (代号, 来源)。环境变量 RK_MACHINE_NAME 优先（Bunsen 会注入自己的服务器 ID）；
+    否则从主机名取：首段按词切开，第一个词加其余词的首字母（数字整段保留），如 gpu-node-03 → gpun03、
+    AliceMacBook-Pro → alicembp。macOS 用 LocalHostName，因为 gethostname 常常是 IP。
+    主机名是 IP、localhost 或取不出两位以上时，用本机标识的哈希（m + 6 位）。"""
+    global _NAME
+    if _NAME:
+        return _NAME
+    raw = os.environ.get("RK_MACHINE_NAME", "").strip()
+    if raw:
+        if not MACHINE_NAME_RE.match(raw):
+            die(f"RK_MACHINE_NAME={raw} 不合规：2 到 12 位小写字母或数字，字母开头，不能是 r 加数字。")
+        _NAME = (raw, "环境变量 RK_MACHINE_NAME")
+        return _NAME
+    host = ""
+    if sys.platform == "darwin":
+        try:
+            host = subprocess.run(["scutil", "--get", "LocalHostName"], capture_output=True,
+                                  text=True, timeout=5).stdout.strip()
+        except (OSError, subprocess.SubprocessError):
+            host = ""
+    host = host or socket.gethostname()
+    label = "" if re.fullmatch(r"[\d.:]+", host) or host.lower().startswith("localhost") else host.split(".")[0]
+    words = re.findall(r"[A-Z]?[a-z]+|[A-Z]+(?![a-z])|\d+", label)
+    code = (words[0] + "".join(w if w.isdigit() else w[0] for w in words[1:])).lower() if words else ""
+    if code and not code[0].isalpha():
+        code = "m" + code
+    code = code[:12]
+    if MACHINE_NAME_RE.match(code):
+        _NAME = (code, f"主机名 {host}")
+    else:
+        _NAME = ("m" + sha256_bytes(machine_id().encode())[:6], "本机标识的哈希（主机名不可用）")
+        if not MACHINE_NAME_RE.match(_NAME[0]):
+            _NAME = ("m" + sha256_bytes(_NAME[0].encode())[:6], _NAME[1])
+    return _NAME
+
+
+def next_run_id(name):
+    code, _ = machine_name()
+    day = datetime.date.today().strftime("%Y%m%d")
+    n = 0
+    if RUNS.is_dir():
+        for d in RUNS.iterdir():
+            m = NEW_ID_RE.match(d.name)
+            if m and m["date"] == day and m["machine"] == code:
+                n = max(n, int(m["n"]))
+    return f"{day}-{code}-r{n + 1:02d}-{name}"
 
 
 def on_this_machine(meta):
@@ -160,10 +226,28 @@ def run_ids():
 # ---------------------------------------------------------------- run
 
 
+def cmd_id(a):
+    code, src = machine_name()
+    if not a.name:
+        print(f"本机代号：{code}（来自{src}）。要换就设环境变量 RK_MACHINE_NAME。")
+        return
+    if not NAME_RE.match(a.name):
+        die("简称只用字母、数字、下划线、点和连字符")
+    print(next_run_id(a.name))
+
+
 def cmd_run(a):
     rid = a.run_id
-    if not RUN_ID_RE.match(rid):
-        die("运行 ID 形如 YYYYMMDD-rNN-简称，例如 20261112-r01-baseline")
+    code, src = machine_name()
+    pid_ = NEW_ID_RE.match(rid)
+    if not pid_:
+        if OLD_ID_RE.match(rid):
+            die(f"运行 ID 现在要带本机代号：YYYYMMDD-{code}-rNN-简称（不同机器各自编号也不会撞）。"
+                f"用 rk id <简称> 生成下一个，例如 {next_run_id(rid.split('-', 2)[2])}")
+        die(f"运行 ID 形如 YYYYMMDD-<本机代号>-rNN-简称；本机代号是 {code}（来自{src}）。用 rk id <简称> 生成下一个。")
+    if pid_["machine"] != code:
+        die(f"运行 ID 里的机器代号是 {pid_['machine']}，本机是 {code}（来自{src}）。"
+            f"每台机器只用自己的代号编号：rk id {pid_['name']}")
     d = RUNS / rid
     if d.exists():
         die(f"运行 ID {rid} 已存在。失败的批次保留记录、不覆盖；用新 ID 重跑，规则不变。")
@@ -183,6 +267,7 @@ def cmd_run(a):
         "cwd": str(cwd),
         "host": socket.gethostname(),
         "machine": machine_id(),
+        "machine_name": code,
         "user": getpass.getuser(),
         "started_at": now(),
         "git_commit": None,
@@ -300,7 +385,7 @@ def cmd_pull(a):
     bad = False
     RUNS.mkdir(parents=True, exist_ok=True)
     for rid in a.run_ids:
-        if not RUN_ID_RE.match(rid):
+        if not valid_run_id(rid):
             print(f"{rid}：不是合法的运行 ID", file=sys.stderr)
             bad = True
             continue
@@ -430,6 +515,7 @@ def cmd_wait(a):
 
 def cmd_status(a):
     rows = []
+    audits = load_audits()[0]
     for rid in run_ids():
         m = load_meta(rid)
         s, code = state_of(rid)
@@ -438,15 +524,17 @@ def cmd_status(a):
                      "host": m.get("host", "?"), "started_at": m.get("started_at", "?"),
                      "ended_at": m.get("ended_at", ""), "elapsed": elapsed(m),
                      "git_commit": (m.get("git_commit") or "")[:8], "git_dirty": m.get("git_dirty"),
-                     "prereg": pre, "note": m.get("note", "")})
+                     "prereg": pre, "audit": audits.get(rid, ("",))[0], "note": m.get("note", "")})
     if a.json:
         print(json.dumps(rows, ensure_ascii=False, indent=2))
         return
-    head = "| 运行 ID | 性质 | 状态 | 退出码 | 主机 | 开始 | 用时 | 提交 | 预登记 | 备注 |\n|---|---|---|---|---|---|---|---|---|---|"
+    head = ("| 运行 ID | 性质 | 状态 | 退出码 | 主机 | 开始 | 用时 | 提交 | 预登记 | 审计 | 备注 |\n"
+            "|---|---|---|---|---|---|---|---|---|---|---|")
     body = "\n".join(
         f"| {r['run_id']} | {'确认/筛选' if r['kind'] == 'prereg' else '探索'} | {r['state']} | "
         f"{'-' if r['exit_code'] is None else r['exit_code']} | {r['host']} | {r['started_at']} | {r['elapsed']} | "
-        f"{r['git_commit'] or '-'}{'（脏）' if r['git_dirty'] else ''} | {r['prereg']} | {r['note']} |" for r in rows)
+        f"{r['git_commit'] or '-'}{'（脏）' if r['git_dirty'] else ''} | {r['prereg']} | {r['audit'] or '-'} | {r['note']} |"
+        for r in rows)
     table = head + ("\n" + body if body else "")
     if a.write:
         (HOME / "RUNS.md").write_text(
@@ -517,24 +605,138 @@ VERDICT_RE = re.compile(r"^\s*[-*]?\s*\**总评\**\s*[:：]\s*\**\s*(不可采�
 AUDIT_RUNS_RE = re.compile(r"^\s*[-*]?\s*\**运行\**\s*[:：]\s*(.+)$", re.M)
 
 
-def load_audits():
-    """audits/*.md → {运行ID: (总评, 文件)}。同一条运行被审过多次时，以文件名排序后的最后一份为准，
-    所以文件名以时间开头（YYYYMMDD-HHMM-简称.md）。"""
-    out, problems = {}, []
+def audit_records():
+    """audits/*.json（rk audit record 写的结构化记录）→ (记录列表, 问题列表)。"""
+    recs, problems = [], []
     d = HOME / "audits"
-    if not d.is_dir():
-        return out, problems
-    for f in sorted(d.glob("*.md")):
-        if f.name == "TEMPLATE.md":
+    for f in sorted(d.glob("*.json")) if d.is_dir() else []:
+        try:
+            r = json.loads(f.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            problems.append(f"audits/{f.name}：不是合法的 JSON。")
+            continue
+        if (not isinstance(r, dict) or r.get("audit_id") != f.stem or r.get("verdict") not in VERDICTS
+                or not isinstance(r.get("runs"), list) or not r["runs"]):
+            problems.append(f"audits/{f.name}：缺 audit_id、runs 或 verdict，或与文件名不符（应由 rk audit record 生成）。")
+            continue
+        rep = r.get("report")
+        if rep:
+            rp = HOME / rep
+            if not rp.is_file():
+                problems.append(f"audits/{f.name}：报告 {rep} 不存在。")
+            elif r.get("report_sha256") and sha256_bytes(rp.read_bytes()) != r["report_sha256"]:
+                problems.append(f"audits/{f.name}：报告 {rep} 登记后被改过。审计报告只读；要更正就重新审计、重新登记。")
+        recs.append(r)
+    return recs, problems
+
+
+def current_audits(recs):
+    """每条运行当前有效的结构化审计：{运行ID: [记录...]}。
+    先后不看时钟，看“取代”关系：rk audit record 登记时，把它看得到的、同一条运行上仍有效的审计记为被取代。
+    两台机器各自登记、彼此没看到时，两份并存，由调用方取较严的总评。"""
+    gone = {(rid, old) for r in recs for rid, olds in (r.get("supersedes") or {}).items() for old in olds}
+    out = {}
+    for r in recs:
+        for rid in r["runs"]:
+            if (rid, r["audit_id"]) not in gone:
+                out.setdefault(rid, []).append(r)
+    return out
+
+
+def load_audits():
+    """→ ({运行ID: (总评, 出处)}, 问题, 警告)。结构化记录优先；同一条运行有几份并存的有效审计时取最严的总评。
+    没有对应结构化记录的 audits/*.md 按旧格式读“运行”“总评”两行（0.2 的做法），以文件名排序后最后一份为准。"""
+    recs, problems = audit_records()
+    warns, out = [], {}
+    for rid, rs in current_audits(recs).items():
+        worst = max(rs, key=lambda r: (SEVERITY[r["verdict"]], r["audit_id"]))
+        out[rid] = (worst["verdict"], f"audits/{worst['audit_id']}.json")
+        if len({r["verdict"] for r in rs}) > 1:
+            warns.append(f"运行 {rid} 有 {len(rs)} 份并存的审计（{'、'.join(r['audit_id'] for r in rs)}），"
+                         f"总评不一致，按最严的“{worst['verdict']}”算。重审后用 rk audit record 登记一份新的即可取代。")
+    referenced = {r.get("report") for r in recs}
+    d = HOME / "audits"
+    legacy = {}
+    for f in sorted(d.glob("*.md")) if d.is_dir() else []:
+        if f.name == "TEMPLATE.md" or f"audits/{f.name}" in referenced:
             continue
         text = f.read_text(encoding="utf-8")
         mv, mr = VERDICT_RE.search(text), AUDIT_RUNS_RE.search(text)
         if not mv or not mr:
-            problems.append(f"audits/{f.name}：缺“运行：”或“总评：（可采信 / 需退回 / 不可采信）”一行。")
+            problems.append(f"audits/{f.name}：没有登记。用 rk audit record --runs <运行ID> --verdict <总评> "
+                            f"--report audits/{f.name} 登记，或删掉这份文件。")
             continue
-        for rid in [x.strip("`") for x in re.split(r"[;；,，\s]+", mr.group(1)) if x.strip("`")]:
-            out[rid] = (mv.group(1), f"audits/{f.name}")
-    return out, problems
+        for rid in split_ids(mr.group(1)):
+            legacy[rid] = (mv.group(1), f"audits/{f.name}")
+    for rid, v in legacy.items():
+        out.setdefault(rid, v)
+    return out, problems, warns
+
+
+def split_ids(text):
+    return [x.strip().strip("`") for x in re.split(r"[;；,，\s]+", text) if x.strip().strip("`")]
+
+
+def cmd_audit(a):
+    if a.action == "show":
+        audits, problems, warns = load_audits()
+        ids = a.run_ids or sorted(audits)
+        for rid in ids:
+            v = audits.get(rid)
+            print(f"{rid} | {v[0] if v else '未审'} | {v[1] if v else '-'}")
+        for it in problems:
+            print(f"[错误] {it}")
+        for it in warns:
+            print(f"[警告] {it}")
+        return
+    runs = split_ids(a.runs or "")
+    if not runs:
+        die("缺 --runs：这次审计覆盖的运行 ID，逗号分隔")
+    if a.verdict not in VERDICTS:
+        die(f"--verdict 只能是 {' / '.join(VERDICTS)}")
+    for rid in runs:
+        if not valid_run_id(rid):
+            die(f"{rid} 不是合法的运行 ID")
+        if not (RUNS / rid / "meta.json").exists():
+            die(f"runs/{rid} 不在本机。审计看的是原始记录：远程的运行先 rk pull 拉回。")
+    code, _ = machine_name()
+    stamp = datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
+    aid, k = f"{stamp}-{code}", 1
+    adir = HOME / "audits"
+    adir.mkdir(parents=True, exist_ok=True)
+    while (adir / f"{aid}.json").exists():
+        k += 1
+        aid = f"{stamp}-{code}-{k}"
+    report = sha = None
+    if a.report:
+        rp = Path(a.report).expanduser()
+        rp = (rp if rp.is_absolute() else Path.cwd() / rp).resolve()
+        if not rp.is_file():
+            die(f"报告文件不存在：{a.report}")
+        text = rp.read_text(encoding="utf-8")
+        mv, mr = VERDICT_RE.search(text), AUDIT_RUNS_RE.search(text)
+        if mv and mv.group(1) != a.verdict:
+            die(f"报告里写的总评是“{mv.group(1)}”，与 --verdict {a.verdict} 不一致。")
+        if mr and set(split_ids(mr.group(1))) != set(runs):
+            die(f"报告里写的运行是 {', '.join(split_ids(mr.group(1)))}，与 --runs 不一致。")
+        if adir.resolve() not in rp.parents:
+            dst = adir / f"{aid}.md"
+            shutil.copy2(rp, dst)
+            rp = dst
+        report = str(rp.relative_to(HOME.resolve())) if HOME.resolve() in rp.parents else str(rp)
+        sha = sha256_bytes(rp.read_bytes())
+    recs, _ = audit_records()
+    cur = current_audits(recs)
+    supersedes = {rid: [r["audit_id"] for r in cur[rid]] for rid in runs if cur.get(rid)}
+    rk_root = repo_root(HOME)
+    head = git(["rev-parse", "HEAD"], rk_root)[1] if rk_root else ""
+    rec = {"audit_id": aid, "runs": runs, "verdict": a.verdict, "report": report, "report_sha256": sha,
+           "by": a.by or "research:auditor", "note": a.note or "", "recorded_at": now(),
+           "machine": machine_id(), "machine_name": code, "git_head": head or None, "supersedes": supersedes}
+    write_json(adir / f"{aid}.json", rec)
+    print(f"已登记审计 {aid}：{', '.join(runs)} → {a.verdict}"
+          + (f"；取代 {'、'.join(sorted({x for v in supersedes.values() for x in v}))}" if supersedes else "")
+          + (f"；报告 {report}" if report else "；没有附报告"))
 
 
 def ledger_rows(text):
@@ -551,11 +753,27 @@ def cmd_check(a):
     root = repo_root(HOME)
     ids = run_ids()
     states = {rid: state_of(rid) for rid in ids}
-    audits, problems = load_audits()
+    audits, problems, audit_warns = load_audits()
     errors.extend(problems)
+    warns.extend(audit_warns)
     for rid, (_, f) in audits.items():
         if rid not in states:
             warns.append(f"{f}：审计的运行 {rid} 在 runs/ 里不存在（远程的运行先 rk pull 拉回）。")
+
+    codes = {}
+    for rid in ids:
+        m = load_meta(rid)
+        if m.get("run_id") != rid:
+            errors.append(f"runs/{rid}：meta.json 里的运行 ID 是 {m.get('run_id')}，与目录名不符。")
+        pm = NEW_ID_RE.match(rid)
+        if pm and m.get("machine_name") and m["machine_name"] != pm["machine"]:
+            errors.append(f"runs/{rid}：ID 里的机器代号 {pm['machine']} 与记录的 {m['machine_name']} 不符。")
+        if pm and m.get("machine"):
+            codes.setdefault(pm["machine"], set()).add(m["machine"])
+    for code, ms in sorted(codes.items()):
+        if len(ms) > 1:
+            warns.append(f"机器代号 {code} 被 {len(ms)} 台不同的机器用过，运行 ID 可能撞号。"
+                         f"给其中一台设环境变量 RK_MACHINE_NAME（2 到 12 位小写字母或数字）。")
 
     for rid in ids:
         m, (s, _) = load_meta(rid), states[rid]
@@ -568,6 +786,11 @@ def cmd_check(a):
             if m.get("git_dirty"):
                 warns.append(f"runs/{rid}：启动时工作区有未提交改动，结果对不上单一提交号。")
             t0 = m.get("started_at", "")
+            run_commit = m.get("git_commit")
+            if root and run_commit and git(["cat-file", "-e", run_commit + "^{commit}"], root)[0] != 0:
+                errors.append(f"runs/{rid}：运行所用的提交 {run_commit[:8]} 不在本仓库历史里，无法证明预登记在先。"
+                              f"先把那台机器的提交合并进来（它的 sync 分支或研究分支），再核验。")
+                run_commit = "missing"
             for p in m.get("prereg", []):
                 if p.get("uncommitted") or not p.get("commit"):
                     errors.append(f"runs/{rid}：预登记 {p['path']} 启动时未提交，无法证明规则早于分数。")
@@ -582,12 +805,24 @@ def cmd_check(a):
                 blob = subprocess.run(["git", "show", f"{p['commit']}:{p['path']}"], cwd=str(root), capture_output=True)
                 if blob.returncode != 0 or sha256_bytes(blob.stdout) != p["sha256"]:
                     errors.append(f"runs/{rid}：提交 {p['commit'][:8]} 里的 {p['path']} 与启动时的内容不一致。")
-                _, ct = git(["show", "-s", "--format=%cI", p["commit"]], root)
-                try:
-                    if datetime.datetime.fromisoformat(ct) > datetime.datetime.fromisoformat(t0):
-                        errors.append(f"runs/{rid}：预登记提交时间 {ct} 晚于启动时间 {t0}。")
-                except ValueError:
-                    warns.append(f"runs/{rid}：无法比较预登记提交时间与启动时间。")
+                if run_commit == "missing":
+                    pass
+                elif run_commit:  # 先后看提交因果：预登记提交必须是运行所用提交的祖先（或就是它），与时钟无关
+                    rc, _ = git(["merge-base", "--is-ancestor", p["commit"], run_commit], root)
+                    if rc == 1:
+                        errors.append(f"runs/{rid}：预登记提交 {p['commit'][:8]} 不是运行所用提交 {run_commit[:8]} "
+                                      f"的祖先，无法证明判定规则早于分数。")
+                    elif rc != 0:
+                        warns.append(f"runs/{rid}：无法判断预登记提交与运行提交的先后。")
+                else:  # 旧记录没有提交号，只能退回比较时间
+                    _, ct = git(["show", "-s", "--format=%cI", p["commit"]], root)
+                    try:
+                        if datetime.datetime.fromisoformat(ct) > datetime.datetime.fromisoformat(t0):
+                            errors.append(f"runs/{rid}：预登记提交时间 {ct} 晚于启动时间 {t0}。")
+                        else:
+                            notes.append(f"runs/{rid}：没有记录运行所用的提交，预登记先后只按时间核对。")
+                    except ValueError:
+                        warns.append(f"runs/{rid}：无法比较预登记提交时间与启动时间。")
                 cur = root / p["path"]
                 if cur.is_file() and sha256_bytes(cur.read_bytes()) != p["sha256"]:
                     notes.append(f"runs/{rid}：{p['path']} 启动后有改动；判定以提交 {p['commit'][:8]} 的版本为准，"
@@ -598,6 +833,20 @@ def cmd_check(a):
                 warns.append(f"runs/{rid}：有结果页但还没有审计记录（audits/）。")
         if m.get("deviations"):
             notes.append(f"runs/{rid}：登记了偏离：{'；'.join(m['deviations'])}")
+
+    rf = HOME / "RUNS.md"
+    if rf.exists():
+        shown, dup = {}, False
+        for t in parse_tables(rf.read_text(encoding="utf-8")):
+            c_id, c_st = col(t["header"], "运行 ID"), col(t["header"], "状态")
+            if c_id is None or c_st is None:
+                continue
+            for row in t["rows"]:
+                if len(row) > max(c_id, c_st) and row[c_id]:
+                    dup = dup or row[c_id] in shown
+                    shown[row[c_id]] = row[c_st]
+        if dup or shown != {rid: states[rid][0] for rid in ids}:
+            warns.append("RUNS.md 不是最新（新运行结束或合并别的机器的记录之后常见）：rk status --write 重新生成。")
 
     ov = HOME / "OVERVIEW.md"
     n_rows = 0
@@ -744,6 +993,10 @@ def main():
     ap = argparse.ArgumentParser(prog="rk", description="research kit")
     sub = ap.add_subparsers(dest="command", required=True)
 
+    p = sub.add_parser("id", help="本机代号；给出简称时生成下一个运行 ID")
+    p.add_argument("name", nargs="?")
+    p.set_defaults(fn=cmd_id)
+
     p = sub.add_parser("run", help="登记并启动一次运行（后台、带退出码与日志）")
     p.add_argument("run_id")
     p.add_argument("--prereg", action="append", metavar="文件", help="已提交的预登记/分析脚本，可多次")
@@ -779,6 +1032,16 @@ def main():
     p.add_argument("--write", action="store_true")
     p.add_argument("--json", action="store_true")
     p.set_defaults(fn=cmd_status)
+
+    p = sub.add_parser("audit", help="登记或查看独立审计")
+    p.add_argument("action", choices=["record", "show"])
+    p.add_argument("run_ids", nargs="*", help="show 时只看这些运行")
+    p.add_argument("--runs", help="record：这次审计覆盖的运行 ID，逗号分隔")
+    p.add_argument("--verdict", help="record：可采信 / 需退回 / 不可采信")
+    p.add_argument("--report", help="record：审计员报告；不在 audits/ 里时复制进去")
+    p.add_argument("--by", help="record：审计员（默认 research:auditor）")
+    p.add_argument("--note")
+    p.set_defaults(fn=cmd_audit)
 
     p = sub.add_parser("check", help="核验记录")
     p.set_defaults(fn=cmd_check)

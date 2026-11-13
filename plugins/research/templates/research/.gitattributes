@@ -1,0 +1,6 @@
+# 多台机器各自写研究记录，经 git 汇合。只追加的文件用 union 合并：两边追加的行都保留，不出冲突。
+LEDGER.md merge=union
+LOG.md merge=union
+LESSONS.md merge=union
+# RUNS.md 是生成的：合并后执行 rk status --write 重新生成（rk check 会提醒）。
+RUNS.md merge=union

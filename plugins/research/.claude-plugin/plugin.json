@@ -2,7 +2,7 @@
   "$schema": "https://json.schemastore.org/claude-code-plugin-manifest.json",
   "name": "research",
   "displayName": "Research Loop",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "自主科研循环：主会话统筹，执行者、调研员、审计员子代理分工；预登记、先筛选后确认、数字可追溯、独立审计；等待长任务时不空转。适用于计算实验、数据分析、理论、综述、仿真、工程等各类研究。",
   "author": {
     "name": "Cornna"
