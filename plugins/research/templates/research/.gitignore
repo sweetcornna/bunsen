@@ -3,4 +3,5 @@ runs/*/log.txt
 runs/*/pid
 runs/*/sup.pid
 runs/*/*.tmp
+runs/.pull-*/
 __pycache__/

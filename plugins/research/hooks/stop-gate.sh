@@ -43,5 +43,7 @@ reason='研究循环还开着，但你要停下，而且没有任何后台任务
 3. 需要用户决定 → 写进 SUMMARY.md 的“需要你决定的事”，执行 rk block "<要决定的事>"，然后明确地问。
 4. 达到停机条件或用户叫停 → 更新 STATE.md 与 SUMMARY.md，执行 rk loop off，给出收尾汇报。
 “我接下来会做 X”不是结束的理由：要么现在做 X，要么说明在等什么。'
-jq -n --arg r "$reason" '{decision: "block", reason: $r}'
+# 用 additionalContext 而不是 decision:block：这是按设计给的提醒，不该在界面上显示成钩子错误。
+# 两者受同样的防循环保护（下一次 stop_hook_active 为 true，连续续跑有上限）。
+jq -n --arg r "$reason" '{hookSpecificOutput: {hookEventName: "Stop", additionalContext: $r}}'
 exit 0

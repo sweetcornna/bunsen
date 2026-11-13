@@ -4,8 +4,9 @@
     rk run <运行ID> (--prereg 文件... | --explore) [--manual] [--allow-dirty] -- <入口命令>
     rk wait [运行ID...] [--interval 分钟]      阻塞到全部结束或到状态间隔（后台运行，靠退出通知唤醒）
     rk done <运行ID> [--fail] [--note 说明]    结束一条手工批次（文献、推导等没有进程的工作）
+    rk pull <别名>:<远程研究目录> <运行ID...>  把远程主机上已结束的运行记录（含日志）拉回本机
     rk status [--write] [--json]               所有运行的真实状态；--write 重新生成 RUNS.md
-    rk check                                   核验记录：数字可追溯、预登记早于启动、结论有证据
+    rk check                                   核验记录：数字可追溯、预登记早于启动、结论有证据与审计、账本只追加
     rk loop on|off|status                      研究循环开关（Stop 钩子据此判断）
     rk block <要用户决定的事> | rk unblock      登记/解除“在等用户”
 
@@ -20,10 +21,12 @@ import hashlib
 import json
 import os
 import re
+import shutil
 import signal
 import socket
 import subprocess
 import sys
+import tempfile
 import time
 from pathlib import Path
 
@@ -58,6 +61,40 @@ def repo_root(path):
 
 def sha256_bytes(data):
     return hashlib.sha256(data).hexdigest()
+
+
+_MACHINE = None
+
+
+def machine_id():
+    """本机的稳定标识（取哈希，不把硬件序号写进记录）。主机名会随网络变化，不能用来判断“是不是本机”。
+    取不到时退回主机名。环境变量 RK_MACHINE_ID 可覆盖（测试用）。"""
+    global _MACHINE
+    if _MACHINE is None:
+        raw = os.environ.get("RK_MACHINE_ID", "")
+        for f in ("/etc/machine-id", "/var/lib/dbus/machine-id"):
+            if raw:
+                break
+            try:
+                raw = Path(f).read_text().strip()
+            except OSError:
+                pass
+        if not raw and sys.platform == "darwin":
+            try:
+                out = subprocess.run(["ioreg", "-rd1", "-c", "IOPlatformExpertDevice"],
+                                     capture_output=True, text=True, timeout=5).stdout
+                m = re.search(r'"IOPlatformUUID"\s*=\s*"([^"]+)"', out)
+                raw = m.group(1) if m else ""
+            except (OSError, subprocess.SubprocessError):
+                raw = ""
+        _MACHINE = sha256_bytes(raw.encode())[:16] if raw else "host:" + socket.gethostname()
+    return _MACHINE
+
+
+def on_this_machine(meta):
+    if meta.get("machine"):
+        return meta["machine"] == machine_id()
+    return meta.get("host") == socket.gethostname()  # 旧记录没有 machine 字段
 
 
 def load_meta(rid):
@@ -101,7 +138,7 @@ def state_of(rid):
         return "lost", None
     if meta.get("manual"):
         return "open", None
-    if meta.get("host") != socket.gethostname():
+    if not on_this_machine(meta):
         return "remote", None
     for name in ("sup.pid", "pid"):
         f = d / name
@@ -145,6 +182,7 @@ def cmd_run(a):
         "cmd": cmd,
         "cwd": str(cwd),
         "host": socket.gethostname(),
+        "machine": machine_id(),
         "user": getpass.getuser(),
         "started_at": now(),
         "git_commit": None,
@@ -249,6 +287,89 @@ def cmd_done(a):
     write_json(d / "meta.json", meta)
     (d / "exit_code").write_text(f"{code}\n")
     print(f"{a.run_id} 记为 {'失败' if code else '完成'}")
+
+
+# ---------------------------------------------------------------- pull
+
+PULL_SKIP = ("pid", "sup.pid")
+
+
+def cmd_pull(a):
+    """把远程主机上已结束的运行记录拉回本机。只补缺失的文件，从不覆盖本机已有的记录。"""
+    m = re.match(r"^([^/:]+):(.+)$", a.source)
+    bad = False
+    RUNS.mkdir(parents=True, exist_ok=True)
+    for rid in a.run_ids:
+        if not RUN_ID_RE.match(rid):
+            print(f"{rid}：不是合法的运行 ID", file=sys.stderr)
+            bad = True
+            continue
+        tmp = Path(tempfile.mkdtemp(prefix=".pull-", dir=str(RUNS)))
+        try:
+            got = tmp / rid
+            if m:
+                host, path = m.groups()
+                p = subprocess.run(["scp", "-q", "-r", "-o", "BatchMode=yes", "-o", "ConnectTimeout=15",
+                                    f"{host}:{path.rstrip('/')}/runs/{rid}", str(tmp)],
+                                   capture_output=True, text=True)
+                if p.returncode != 0 or not got.is_dir():
+                    print(f"{rid}：从 {host} 复制失败：{(p.stderr or '').strip()[:300]}", file=sys.stderr)
+                    bad = True
+                    continue
+            else:
+                src = Path(a.source).expanduser() / "runs" / rid
+                if not src.is_dir():
+                    print(f"{rid}：{src} 不存在", file=sys.stderr)
+                    bad = True
+                    continue
+                shutil.copytree(src, got)
+            try:
+                rmeta = json.loads((got / "meta.json").read_text(encoding="utf-8"))
+            except (OSError, ValueError):
+                print(f"{rid}：远程记录没有可读的 meta.json", file=sys.stderr)
+                bad = True
+                continue
+            if rmeta.get("run_id") != rid:
+                print(f"{rid}：远程 meta.json 里的运行 ID 是 {rmeta.get('run_id')}，对不上", file=sys.stderr)
+                bad = True
+                continue
+            if not (got / "exit_code").exists():
+                print(f"{rid}：在 {rmeta.get('host', '?')} 上还没结束（没有退出码）。结束后再拉；"
+                      f"现在要看日志就 ssh 过去读。", file=sys.stderr)
+                bad = True
+                continue
+            d = RUNS / rid
+            if d.exists():
+                lmeta = load_meta(rid)
+                if lmeta.get("started_at") != rmeta.get("started_at"):
+                    print(f"{rid}：本机已有同 ID 的另一条运行（启动时间不同），不合并。", file=sys.stderr)
+                    bad = True
+                    continue
+                lec, rec = d / "exit_code", got / "exit_code"
+                if lec.exists() and lec.read_text().strip() != rec.read_text().strip():
+                    print(f"{rid}：本机与远程的退出码不一致，不合并，请人工核查。", file=sys.stderr)
+                    bad = True
+                    continue
+            d.mkdir(exist_ok=True)
+            added = []
+            for f in sorted(got.rglob("*")):
+                rel = f.relative_to(got)
+                if f.is_dir() or rel.name in PULL_SKIP or rel.name.endswith(".tmp"):
+                    continue
+                dst = d / rel
+                if dst.exists():
+                    continue
+                dst.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copy2(f, dst)
+                added.append(str(rel))
+            if not (d / "pulled.json").exists():
+                write_json(d / "pulled.json", {"from": a.source, "pulled_at": now(), "files": added})
+            state, code = state_of(rid)
+            print(f"{rid}：{state}（退出码 {code}），补齐 {len(added)} 个文件"
+                  + (f"：{', '.join(added[:8])}" if added else "（本机已齐）"))
+        finally:
+            shutil.rmtree(tmp, ignore_errors=True)
+    sys.exit(EXIT_FAILED if bad else EXIT_OK)
 
 
 # ---------------------------------------------------------------- wait / status
@@ -392,6 +513,37 @@ def numbers_match(shown, actual):
 
 
 EXTERNAL = re.compile(r"^(doi:|arxiv:|https?://|isbn:|pmid:)", re.I)
+VERDICT_RE = re.compile(r"^\s*[-*]?\s*\**总评\**\s*[:：]\s*\**\s*(不可采信|需退回|可采信)", re.M)
+AUDIT_RUNS_RE = re.compile(r"^\s*[-*]?\s*\**运行\**\s*[:：]\s*(.+)$", re.M)
+
+
+def load_audits():
+    """audits/*.md → {运行ID: (总评, 文件)}。同一条运行被审过多次时，以文件名排序后的最后一份为准，
+    所以文件名以时间开头（YYYYMMDD-HHMM-简称.md）。"""
+    out, problems = {}, []
+    d = HOME / "audits"
+    if not d.is_dir():
+        return out, problems
+    for f in sorted(d.glob("*.md")):
+        if f.name == "TEMPLATE.md":
+            continue
+        text = f.read_text(encoding="utf-8")
+        mv, mr = VERDICT_RE.search(text), AUDIT_RUNS_RE.search(text)
+        if not mv or not mr:
+            problems.append(f"audits/{f.name}：缺“运行：”或“总评：（可采信 / 需退回 / 不可采信）”一行。")
+            continue
+        for rid in [x.strip("`") for x in re.split(r"[;；,，\s]+", mr.group(1)) if x.strip("`")]:
+            out[rid] = (mv.group(1), f"audits/{f.name}")
+    return out, problems
+
+
+def ledger_rows(text):
+    rows = set()
+    for t in parse_tables(text):
+        if col(t["header"], "状态") is None:
+            continue
+        rows.update(tuple(r) for r in t["rows"] if any(r))
+    return rows
 
 
 def cmd_check(a):
@@ -399,11 +551,19 @@ def cmd_check(a):
     root = repo_root(HOME)
     ids = run_ids()
     states = {rid: state_of(rid) for rid in ids}
+    audits, problems = load_audits()
+    errors.extend(problems)
+    for rid, (_, f) in audits.items():
+        if rid not in states:
+            warns.append(f"{f}：审计的运行 {rid} 在 runs/ 里不存在（远程的运行先 rk pull 拉回）。")
 
     for rid in ids:
         m, (s, _) = load_meta(rid), states[rid]
         if s == "lost":
             errors.append(f"runs/{rid}：进程不在且没有退出码。按失败归档：rk done {rid} --fail --note <原因>")
+        if s == "remote":
+            warns.append(f"runs/{rid}：跑在 {m.get('host', '?')} 上，本机还没有退出码。"
+                         f"结束后 rk pull <别名>:<远程研究目录> {rid} 拉回记录再核验。")
         if m.get("kind") == "prereg":
             if m.get("git_dirty"):
                 warns.append(f"runs/{rid}：启动时工作区有未提交改动，结果对不上单一提交号。")
@@ -434,6 +594,8 @@ def cmd_check(a):
                                  f"看过结果后的改动只能算“描述”。")
             if s == "ok" and not (HOME / "results" / f"{rid}.md").exists():
                 warns.append(f"runs/{rid}：已结束但没有结果页 results/{rid}.md。")
+            elif s == "ok" and rid not in audits:
+                warns.append(f"runs/{rid}：有结果页但还没有审计记录（audits/）。")
         if m.get("deviations"):
             notes.append(f"runs/{rid}：登记了偏离：{'；'.join(m['deviations'])}")
 
@@ -482,7 +644,23 @@ def cmd_check(a):
     led = HOME / "LEDGER.md"
     n_claims = 0
     if led.exists():
-        for t in parse_tables(led.read_text(encoding="utf-8")):
+        led_text = led.read_text(encoding="utf-8")
+        if root:  # 只追加：任何提交过的行都必须原样还在
+            try:
+                rel = led.resolve().relative_to(root.resolve())
+            except ValueError:
+                rel = None
+            rc, out = git(["log", "--format=%H", "--", str(rel)], root) if rel else (1, "")
+            cur, seen = ledger_rows(led_text), set()
+            for c in (out.split() if rc == 0 else []):
+                blob = subprocess.run(["git", "show", f"{c}:{rel}"], cwd=str(root), capture_output=True)
+                if blob.returncode != 0:
+                    continue
+                for r in ledger_rows(blob.stdout.decode("utf-8", "replace")) - cur - seen:
+                    seen.add(r)
+                    errors.append(f"LEDGER 已提交的旧行被改动或删除（见提交 {c[:8]}）：「{' | '.join(r)[:120]}」。"
+                                  f"账本只追加：恢复原行，状态变化用新行更正或撤回。")
+        for t in parse_tables(led_text):
             c_st, c_ev = col(t["header"], "状态"), col(t["header"], "证据")
             if c_st is None or c_ev is None:
                 continue
@@ -492,18 +670,33 @@ def cmd_check(a):
                 n_claims += 1
                 label, status, ev = row[0], row[c_st], row[c_ev]
                 tokens = [x.strip().strip("`") for x in re.split(r"[;；,，\s]+", ev) if x.strip().strip("`")]
-                if ("已证实" in status or "已否定" in status) and not tokens:
+                decisive = "已证实" in status or "已否定" in status
+                if decisive and not tokens:
                     errors.append(f"LEDGER {label}：状态是“{status}”却没有证据。")
+                used = []
                 for tok in tokens:
                     if tok.startswith("run:"):
                         rid = tok[4:]
                         if rid not in states:
                             errors.append(f"LEDGER {label}：证据里的运行 {rid} 不存在。")
-                        elif states[rid][0] != "ok" and "已证实" in status:
-                            errors.append(f"LEDGER {label}：证据运行 {rid} 的状态是 {states[rid][0]}，不能支撑“已证实”。")
+                        else:
+                            used.append(rid)
                     elif "/" in tok and not EXTERNAL.match(tok):
                         if not ((HOME / tok).exists() or (root and (root / tok).exists())):
                             errors.append(f"LEDGER {label}：证据文件 {tok} 不存在。")
+                        elif re.match(r"^(research/)?results/", tok) and Path(tok).stem in states:
+                            used.append(Path(tok).stem)
+                if not decisive:
+                    continue
+                for rid in dict.fromkeys(used):
+                    if states[rid][0] != "ok":
+                        errors.append(f"LEDGER {label}：证据运行 {rid} 的状态是 {states[rid][0]}，"
+                                      f"失败或没结束的运行不能支撑“{status}”。")
+                    elif audits.get(rid, ("",))[0] != "可采信":
+                        got = audits.get(rid)
+                        errors.append(f"LEDGER {label}：“{status}”依赖的运行 {rid} 没有通过独立审计"
+                                      + (f"（{got[1]} 的总评是“{got[0]}”）。" if got else
+                                         "（audits/ 里没有它的审计记录）。"))
 
     for kind, items in (("错误", errors), ("警告", warns), ("说明", notes)):
         for it in items:
@@ -570,6 +763,11 @@ def main():
     p.add_argument("--fail", action="store_true")
     p.add_argument("--note")
     p.set_defaults(fn=cmd_done)
+
+    p = sub.add_parser("pull", help="把远程主机上已结束的运行记录（含日志）拉回本机；只补缺失的文件")
+    p.add_argument("source", metavar="别名:远程研究目录", help="也可以是本机上另一个研究目录的路径")
+    p.add_argument("run_ids", nargs="+")
+    p.set_defaults(fn=cmd_pull)
 
     p = sub.add_parser("wait", help="阻塞到运行结束或到状态间隔；退出码 0 全部成功 / 1 有失败 / 3 到点")
     p.add_argument("run_ids", nargs="*")

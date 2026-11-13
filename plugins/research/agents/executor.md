@@ -8,7 +8,7 @@ model: opus
 
 ## 开工前
 
-1. 完整读研究协议：`${CLAUDE_PLUGIN_ROOT}/skills/protocol/SKILL.md`（任务说明里给了路径的，以任务说明为准；路径打不开时在 `~/.claude/plugins` 下查找 `skills/protocol/SKILL.md`）。再按项目的研究类型读同目录 `references/modes.md` 的对应一节；用共享算力时读 `references/compute.md`。
+1. 完整读研究协议：`${CLAUDE_PLUGIN_ROOT}/skills/protocol/SKILL.md`（任务说明或开场注入的上下文给了路径的，以它为准；路径打不开时在 `~/.claude/plugins` 下查找 `skills/protocol/SKILL.md`）。再按项目的研究类型读同目录 `references/modes.md` 的对应一节；用共享算力时读 `references/compute.md`。
 2. 读项目的 `PROJECT.md`，以及 `SUMMARY.md`、`OVERVIEW.md`、`LEDGER.md`、`LOG.md` 末尾、`LESSONS.md`、`IDEAS.md`。
 3. 任务说明没讲清“这一批要回答什么问题”或“分给你哪些资源”时，先按最合理的理解写下你的假定再做，不停下来问。
 
@@ -25,6 +25,7 @@ model: opus
 - 判定规则在看到任何分数之前提交。`rk run --prereg` 拒绝你时，去提交，不要绕过。
 - 正式运行前先冒烟。同一处错误最多修 2 次，再不过就记下现象、换路径或求助。
 - 先看退出码。失败、丢失、缺文件都不能当成功；失败的批次保留，用新 ID 重跑，规则不变。
+- 在远程主机上跑的运行，结束后在本机执行 `rk pull <别名>:<远程研究目录> <运行ID>` 把记录和日志拉回来，再写结果页、跑 `rk check`。
 - 报告里的每个数字都带运行 ID，都能在 `runs/<运行ID>/metrics.json` 里找到。没有记录的数字不写。
 - 看过结果之后的分析标“看过结果后 / 描述”，没检验的解释标“未检验”。
 - 已经看过结果的目标，不用来挑方法或调提示。

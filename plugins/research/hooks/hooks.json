@@ -1,5 +1,5 @@
 {
-  "description": "research 插件：会话开始或压缩后重新锚定研究状态；研究循环开着时防止无故停下；拦截密钥外泄",
+  "description": "research 插件：会话开始或压缩后重新锚定研究状态；给本插件的子代理注入研究目录与协议位置；研究循环开着时防止无故停下；用户答复后解除“在等用户”；拦截密钥外泄与读取",
   "hooks": {
     "SessionStart": [
       {
@@ -8,6 +8,29 @@
           {
             "type": "command",
             "command": "bash \"${CLAUDE_PLUGIN_ROOT}/hooks/session-start.sh\"",
+            "timeout": 10
+          }
+        ]
+      }
+    ],
+    "SubagentStart": [
+      {
+        "matcher": "^research:(executor|auditor|scout)$",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash \"${CLAUDE_PLUGIN_ROOT}/hooks/subagent-start.sh\"",
+            "timeout": 10
+          }
+        ]
+      }
+    ],
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash \"${CLAUDE_PLUGIN_ROOT}/hooks/user-reply.sh\"",
             "timeout": 10
           }
         ]
@@ -26,7 +49,7 @@
     ],
     "PreToolUse": [
       {
-        "matcher": "Bash|Write|Edit|NotebookEdit|Agent|Task|SendMessage",
+        "matcher": "Bash|Write|Edit|NotebookEdit|Agent|Task|SendMessage|Read|Grep",
         "hooks": [
           {
             "type": "command",

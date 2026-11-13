@@ -44,21 +44,22 @@ claude plugin install research@research-plugin --scope user
 
 ## 它怎么保证“自己不断做下去，又不瞎忙”
 
-- **循环开关加 Stop 钩子**。循环开着时，结束一轮只有三种正当理由：有后台任务在跑（它结束时会唤醒会话）、在等你的决定、循环已关。都不是，钩子提醒一次：要么做队列里的下一项，要么把等待架好。
+- **循环开关加 Stop 钩子**。循环开着时，结束一轮只有三种正当理由：有后台任务在跑（它结束时会唤醒会话）、在等你的决定、循环已关。都不是，钩子提醒一次（以提示的形式，不显示成钩子错误）：要么做队列里的下一项，要么把等待架好。
+- **答复后自动解除等待**。统筹者用 `rk block` 登记“在等你决定”时 Stop 钩子放行；你一回复，UserPromptSubmit 钩子就解除这个登记并提醒统筹者，答复没解决的它会重新登记。任务通知之类机器发来的消息、`/research:status` 不算答复。
 - **等待靠唤醒，不靠轮询**。`rk wait` 放后台，运行结束或到状态间隔时退出并唤醒代理。到点的那一拍只做三件事：一句状态、心跳、重新等待。
 - **等待纪律**。等的时候只有三种正当用法，按顺序：填满空闲算力、备好下一批、清记录欠账。都不成立就结束这一轮。轮询日志、重读文件、无关的重构与润色、没有问题的调研，都明确不做。
 - **每个动作要有归属**。动手前说得出它推进想法池或研究线里的哪一项，说不出的不做。
 - **熔断与预算**。连续失败或连续无进展达到阈值就不再派同类实验，先做策略评估；预算用尽或达成判据就收尾。
-- **压缩后重新锚定**。上下文被压缩后，SessionStart 钩子把恢复清单和 `STATE.md` 开头重新放进上下文。
+- **压缩后重新锚定**。上下文被压缩后，SessionStart 钩子把恢复清单和 `STATE.md` 开头重新放进上下文。执行者、审计员、调研员启动时，SubagentStart 钩子注入研究目录和协议的位置；子代理被自动压缩后，下一次续用时会再注入一次。
 
 ## 它怎么保证结果可信
 
 - **预登记早于分数是机械保证的**。`rk run --prereg` 拒绝未提交的预登记和未提交的改动，并记下提交号；`rk check` 再核对提交时间早于启动时间。
 - **探索与确认分开**。每次运行要么 `--prereg`，要么 `--explore`；探索性运行的数字进总览表必须标“探索”。
 - **数字可追溯**。总览表每行写 `运行ID:指标键`，`rk check` 逐行对照 `runs/<运行ID>/metrics.json`，没有来源或对不上就报错。
-- **失败不能当成功**。运行状态只看退出码；进程不在又没有退出码记为 lost，按失败处理；失败的运行进不了总览表，也不能支撑“已证实”。
-- **结论账本只追加**。已证实 / 已否定 / 未决 / 撤回四种状态，前两种必须有证据；“死路”要有被否定的精确陈述。
-- **独立审计**。审计员拿不到执行者的叙述，只拿运行 ID、预登记和结果页路径，按十项清单查原始记录。
+- **失败不能当成功**。运行状态只看退出码；进程不在又没有退出码记为 lost，按失败处理；失败的运行进不了总览表，也不能支撑“已证实”或“已否定”。
+- **结论账本只追加**。已证实 / 已否定 / 未决 / 撤回四种状态，前两种必须有证据；“死路”要有被否定的精确陈述。`rk check` 对照 git 历史核查，提交过的行被改动或删除就报错。
+- **独立审计**。审计员拿不到执行者的叙述，只拿运行 ID、预登记和结果页路径，按十项清单查原始记录。报告原样存进 `audits/`；“已证实”“已否定”依赖的运行没有总评“可采信”的审计记录，`rk check` 报错。
 - **发散有章法**。九个互不相见的角度各自出想法，去重成簇、查新颖性、成对比较，优先做能区分假设的最便宜的检验，并保留探索配额。
 
 ## 研究目录
@@ -75,7 +76,8 @@ claude plugin install research@research-plugin --scope user
 | `IDEAS.md` | 想法池，被否决的也留着 |
 | `LOG.md`、`LESSONS.md`、`RUNS.md` | 日志、教训表、运行表（自动生成） |
 | `prereg/`、`results/`、`strategy/` | 预登记、结果页、策略评估 |
-| `runs/<运行ID>/` | 运行记录：meta.json、metrics.json、exit_code、log.txt |
+| `audits/` | 审计员报告原文，文件名以时间开头；`rk check` 读其中的“运行”“总评”两行 |
+| `runs/<运行ID>/` | 运行记录：meta.json、metrics.json、exit_code、log.txt；远程主机上的用 `rk pull` 拉回 |
 | `tools/rk.py`、`tools/collab.py` | 工具，随项目入库，本机和远程主机用同一份 |
 
 ## 共享实验室算力（可选）
@@ -86,7 +88,9 @@ claude plugin install research@research-plugin --scope user
 bash scripts/setup-lab.sh --zip <密钥压缩包>
 ```
 
-口令用 `--secret <名字>` 从标准输入读入，不出现在命令行里。PreToolUse 钩子会拦下内容里带私钥正文或已登记口令的命令、写文件、子代理任务说明和消息。
+口令用 `--secret <名字>` 从标准输入读入，不出现在命令行里。PreToolUse 钩子会拦下内容里带私钥正文或已登记口令的命令、写文件、子代理任务说明和消息，也拦下读出私钥和口令文件内容的调用（Read、Grep，以及 Bash 里 cat、head、grep、cp 之类的常见写法）。只引用路径的用法放行：`ssh -i`、`ssh-add`、`chmod`、`--password-file`；公钥不受限。这是启发式检查，不是沙箱。
+
+运行跑在远程主机上时，记录先留在那台主机的研究目录里。结束后在本机执行 `rk pull <别名>:<远程研究目录> <运行ID>`，把记录和日志拉回来再核验；它只补缺失的文件，不覆盖本机已有的记录，没结束的运行不拉。
 
 多个会话共用显卡时，通过协调主机上的同一份 `COLLAB.md` 排卡，写入一律走 `collab.py`：拿锁、只改自己署名的行、结果与留言只追加、写后重读确认；`free` 把 `nvidia-smi` 和卡位表合成一张“能不能用”的表。规则见 `skills/protocol/references/compute.md`。
 
@@ -96,10 +100,11 @@ bash scripts/setup-lab.sh --zip <密钥压缩包>
 .claude-plugin/     清单与本地市场
 skills/             start resume status stop（入口）；orchestrator protocol ideation lab-access（规则）
 agents/             executor scout auditor
-hooks/              session-start stop-gate guard-secrets
+hooks/              session-start subagent-start user-reply stop-gate guard-secrets
 scripts/            scaffold.sh（建研究目录）、setup-lab.sh（装密钥与档案）
 templates/research/ 研究目录模板与工具
 tests/run.sh        脚手架、rk、collab、钩子的端到端测试
+CHANGELOG.md        变更记录
 ```
 
 ```bash
