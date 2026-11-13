@@ -122,6 +122,7 @@ $C queue --need "2×24GB" --dur 3h --hosts <别名> | dequeue --got | dequeue --
 $C log --kind 结果 "<一句结论；关键数字；出处>"
 $C msg --to 全体 "<内容；希望何时前答复>" | reply --match "<关键字>" "<回复>"
 $C stale | archive
+$C lease show                         # 研究线推进权；取得、续租、交接走 rk line / rk handoff
 ```
 
 `free` 要在有显卡的那台主机上执行。卡不在协调主机上时，把协作文档从管道喂给那台主机上仓库里的同一个脚本（`free` 只读不写）：

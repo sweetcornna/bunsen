@@ -2,5 +2,6 @@
 LEDGER.md merge=union
 LOG.md merge=union
 LESSONS.md merge=union
-# RUNS.md 是生成的：合并后执行 rk status --write 重新生成（rk check 会提醒）。
+# 生成的汇总：合并后重新生成（rk status --write、rk line status --write；rk check 会提醒）。
 RUNS.md merge=union
+STATE.md merge=union

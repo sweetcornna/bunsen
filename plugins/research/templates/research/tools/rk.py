@@ -24,6 +24,7 @@ import hashlib
 import json
 import os
 import re
+import shlex
 import shutil
 import signal
 import socket
@@ -275,6 +276,7 @@ def cmd_run(a):
         "prereg": [],
         "deviations": [],
         "note": a.note or "",
+        "line": a.line or os.environ.get("RESEARCH_LINE") or None,
     }
     if root:
         rc, head = git(["rev-parse", "HEAD"], root)
@@ -491,6 +493,15 @@ def cmd_wait(a):
             die(f"没有这条运行：{rid}")
         if state_of(rid)[0] == "remote":
             die(f"{rid} 跑在 {load_meta(rid).get('host')} 上：在那台主机上执行 rk wait（例如经 ssh）。")
+    for line in held_lines():  # 顺手续租：剩不到一半租期时向协调主机续一次，失败不影响等待
+        c = cache_read(line) or {}
+        if c.get("deadline", 0) - time.time() < 6 * 3600:
+            out, _ = lease_call("renew", line, holder=machine_name()[0], token=c.get("token"))
+            if out and out.get("ok"):
+                cache_write(line, out)
+            elif out:
+                cache_drop(line)
+                print(f"注意：研究线 {line} 的推进权已不在本机（{out.get('message')}）。停下对这条线的写入。")
     deadline = time.time() + a.interval * 60
     while True:
         states = {rid: state_of(rid) for rid in a.run_ids}
@@ -524,7 +535,8 @@ def cmd_status(a):
                      "host": m.get("host", "?"), "started_at": m.get("started_at", "?"),
                      "ended_at": m.get("ended_at", ""), "elapsed": elapsed(m),
                      "git_commit": (m.get("git_commit") or "")[:8], "git_dirty": m.get("git_dirty"),
-                     "prereg": pre, "audit": audits.get(rid, ("",))[0], "note": m.get("note", "")})
+                     "prereg": pre, "audit": audits.get(rid, ("",))[0], "line": m.get("line"),
+                     "note": m.get("note", "")})
     if a.json:
         print(json.dumps(rows, ensure_ascii=False, indent=2))
         return
@@ -834,6 +846,54 @@ def cmd_check(a):
         if m.get("deviations"):
             notes.append(f"runs/{rid}：登记了偏离：{'；'.join(m['deviations'])}")
 
+    for f in line_files():
+        fm, _ = read_line(f)
+        if not fm.get("token") or not fm.get("holder"):
+            errors.append(f"state/{f.name}：开头缺推进权信息（holder、token）。用 rk line new / rk line take 生成，不要手写。")
+            continue
+        if not root:
+            continue
+        rel = str(f.resolve().relative_to(root.resolve()))
+        T, base, holder = fm_token(fm), fm.get("base", "-"), fm.get("holder")
+        if base != "-" and git(["cat-file", "-e", base + "^{commit}"], root)[0] != 0:
+            warns.append(f"state/{f.name}：接手时的提交 {base[:8]} 不在本仓库历史里，无法核对有没有双写。")
+            base = "-"
+        rc, out = git(["log", "--format=%H", "--", rel], root)
+        stale = []
+        for c in (out.split() if rc == 0 else []):
+            blob = subprocess.run(["git", "show", f"{c}:{rel}"], cwd=str(root), capture_output=True)
+            if blob.returncode != 0:
+                continue
+            m = FM_RE.match(blob.stdout.decode("utf-8", "replace"))
+            t = 0
+            if m:
+                tm = re.search(r"^token:\s*(\d+)", m.group(1), re.M)
+                t = int(tm.group(1)) if tm else 0
+            if t > T:
+                errors.append(f"state/{f.name}：当前编号 #{T} 小于提交 {c[:8]} 里的 #{t}，新推进者的记录被旧的覆盖了。"
+                              f"从提交 {c[:8]} 恢复这个文件，再由持有者整理。")
+                break
+            if t < T and base != "-" and git(["merge-base", "--is-ancestor", c, base], root)[0] != 0:
+                stale.append(f"{c[:8]}（#{t}）")
+        if stale:
+            errors.append(f"state/{f.name}：提交 {'、'.join(stale[:5])} 是旧推进权下写的，但 #{T}（{holder}）接手时没有看到它们，"
+                          f"可能是失联的旧推进者在交接或接管之后还在写。核对这些改动、把需要的内容并进当前状态后，"
+                          f"由持有者执行 rk line take {f.stem} --restamp 重新盖章。")
+    if line_files():
+        st = HOME / "STATE.md"
+        want = {(f.stem, read_line(f)[0].get("holder"), fm_token(read_line(f)[0])) for f in line_files()}
+        have = set()
+        for t in parse_tables(st.read_text(encoding="utf-8")) if st.exists() else []:
+            c_l, c_h, c_t = col(t["header"], "线"), col(t["header"], "推进者"), col(t["header"], "编号")
+            if None in (c_l, c_h, c_t):
+                continue
+            for row in t["rows"]:
+                if len(row) > max(c_l, c_h, c_t):
+                    h = "-" if row[c_h] == "无人持有" else row[c_h]
+                    have.add((row[c_l], h, int(row[c_t].lstrip("#") or 0) if row[c_t].lstrip("#").isdigit() else -1))
+        if have != want:
+            warns.append("STATE.md 总览与 state/ 不一致（合并别的机器的记录之后常见）：rk line status --write 重新生成。")
+
     rf = HOME / "RUNS.md"
     if rf.exists():
         shown, dup = {}, False
@@ -955,6 +1015,484 @@ def cmd_check(a):
     sys.exit(EXIT_FAILED if errors else EXIT_OK)
 
 
+# ---------------------------------------------------------------- 研究线与推进权
+
+STATE_DIR = HOME / "state"
+LEASE_DIR = LOOP / "leases"
+HANDOFFS = HOME / "handoffs"
+LINE_RE = re.compile(r"^[\w-]{1,32}$")
+FM_RE = re.compile(r"\A---\n(.*?)\n---\n", re.S)
+GEN_MARK = "<!-- rk:generated"
+FM_KEYS = ("line", "holder", "token", "base", "stamped", "from")
+LINE_TEMPLATE = """# 研究线：<线>
+
+只有持有推进权的机器写本文件：`rk line take` 取得，`rk handoff` 交给别的机器。开头 `---` 之间的推进权信息由 rk 维护，不要手改；正文每完成一步就重写。
+
+- **要回答的问题**：<问题>
+- **最后更新**：<时间>
+- **阶段**：<调研 | 发散 | 派工 | 运行中 | 审核 | 受阻 | 收尾>
+- **在等什么**：<无 | 运行 ID（等待器已在后台）| 子代理 | 用户的决定>
+- **预算已用**：<批数 x / y；GPU·小时；连续无进展批数 n；同一路线连续失败批数 m>
+- **执行者**：<代理 ID，可否续用>
+
+## 下一步
+按顺序做。每项写明它推进的是想法池（IDEAS 编号）里的哪一项。
+
+1. <…>
+
+## 已认领的资源
+- <主机:卡 → 运行 ID，预计结束；没有就写“无”>
+"""
+
+
+def read_line(path):
+    text = Path(path).read_text(encoding="utf-8")
+    m = FM_RE.match(text)
+    fm = {}
+    if m:
+        for ln in m.group(1).splitlines():
+            k, _, v = ln.partition(":")
+            if k.strip():
+                fm[k.strip()] = v.strip()
+    return fm, text[m.end():] if m else text
+
+
+def fm_token(fm):
+    try:
+        return int(fm.get("token") or 0)
+    except ValueError:
+        return 0
+
+
+def write_line(path, fm, body):
+    head = "---\n" + "".join(f"{k}: {fm[k]}\n" for k in FM_KEYS if fm.get(k) not in (None, "")) + "---\n"
+    tmp = Path(path).with_name(Path(path).name + ".tmp")
+    tmp.write_text(head + body, encoding="utf-8")
+    os.replace(tmp, path)
+
+
+def line_files():
+    if not STATE_DIR.is_dir():
+        return []
+    return sorted(f for f in STATE_DIR.glob("*.md") if f.name != "TEMPLATE.md" and LINE_RE.match(f.stem))
+
+
+def line_path(line):
+    if not LINE_RE.match(line or ""):
+        die("研究线的名字只用字母、数字、下划线和连字符，最多 32 个字符")
+    return STATE_DIR / f"{line}.md"
+
+
+def body_field(body, name):
+    m = re.search(rf"\*\*{name}\*\*\s*[:：]\s*(.+)", body)
+    return m.group(1).strip() if m else ""
+
+
+def body_section(body, title, n=3):
+    m = re.search(rf"^##\s*{title}[^\n]*\n(.*?)(?=^## |\Z)", body, re.S | re.M)
+    if not m:
+        return []
+    return [ln for ln in m.group(1).splitlines() if re.match(r"^\s*(\d+\.|[-*])\s+\S", ln)][:n]
+
+
+def overview_text():
+    rows, nexts = [], []
+    for f in line_files():
+        fm, body = read_line(f)
+        holder = fm.get("holder") or "-"
+        rows.append(f"| {f.stem} | {holder if holder != '-' else '无人持有'} | #{fm_token(fm)} | "
+                    f"{body_field(body, '阶段') or '-'} | {body_field(body, '在等什么') or '-'} | "
+                    f"{body_field(body, '最后更新') or '-'} |")
+        nexts.append(f"\n### {f.stem}（{holder if holder != '-' else '无人持有'}）\n\n" +
+                     ("\n".join(body_section(body, "下一步")) or "- （没写）") + "\n")
+    return ("# 当前状态（总览）\n\n" + GEN_MARK + " 由 rk line status --write 从 state/*.md 生成，不要手改 -->\n"
+            "每条研究线的状态写在 `state/<线>.md`，只由持有推进权的机器改写；本文件是汇总。\n\n"
+            "| 线 | 推进者 | 编号 | 阶段 | 在等什么 | 最后更新 |\n|---|---|---|---|---|---|\n" +
+            "\n".join(rows) + "\n\n## 各线的下一步\n" + "".join(nexts))
+
+
+def write_overview():
+    (HOME / "STATE.md").write_text(overview_text(), encoding="utf-8")
+
+
+def collab_cmd():
+    """协调主机上的 collab.py 怎么调用：环境变量 RK_COLLAB，或本机的 .loop/collab（rk line config 写入）。
+    都没有时用本机的登记（.loop/LEASES.json）：一台机器上够用，跨机器交接需要协调主机。"""
+    env = os.environ.get("RK_COLLAB", "").strip()
+    if env:
+        return shlex.split(env), "环境变量 RK_COLLAB"
+    f = LOOP / "collab"
+    if f.exists() and f.read_text(encoding="utf-8").strip():
+        return shlex.split(f.read_text(encoding="utf-8").strip()), ".loop/collab"
+    return None, "本机（没有配置协调主机）"
+
+
+def lease_call(action, line=None, **kw):
+    """调用协调主机上的 collab.py lease → (结果, 错误)。结果是 collab 给出的 JSON；连不上时结果为 None。"""
+    base, _ = collab_cmd()
+    args = ["lease", action, "--json"]
+    if base is None:
+        LOOP.mkdir(parents=True, exist_ok=True)
+        base = [sys.executable, str(Path(__file__).resolve().parent / "collab.py")]
+        args += ["--leases", str(LOOP / "LEASES.json")]
+    if line:
+        args += ["--line", line]
+    for k, v in kw.items():
+        if v is None or v is False:
+            continue
+        args += [f"--{k.replace('_', '-')}"] if v is True else [f"--{k.replace('_', '-')}", str(v)]
+    if os.path.basename(base[0]) == "ssh":
+        args = [shlex.quote(x) for x in args]
+    try:
+        p = subprocess.run(base + args, capture_output=True, text=True, timeout=60)
+    except (OSError, subprocess.SubprocessError) as e:
+        return None, f"连不上协调主机：{e}"
+    lines = [ln for ln in p.stdout.splitlines() if ln.strip()]
+    try:
+        return json.loads(lines[-1]), None
+    except (IndexError, ValueError):
+        return None, f"协调主机没有给出结果（退出码 {p.returncode}）：{(p.stderr or p.stdout).strip()[:300]}"
+
+
+def cache_read(line):
+    try:
+        return json.loads((LEASE_DIR / f"{line}.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+
+
+def cache_write(line, out):
+    try:
+        left = (datetime.datetime.strptime(out["expires"], "%Y-%m-%d %H:%M:%S")
+                - datetime.datetime.strptime(out["now"], "%Y-%m-%d %H:%M:%S")).total_seconds()
+    except (KeyError, TypeError, ValueError):
+        left = 0
+    LEASE_DIR.mkdir(parents=True, exist_ok=True)
+    write_json(LEASE_DIR / f"{line}.json", {"line": line, "holder": out["holder"], "token": out["token"],
+                                            "expires": out["expires"], "deadline": time.time() + left,
+                                            "via": collab_cmd()[1]})
+
+
+def cache_drop(line):
+    (LEASE_DIR / f"{line}.json").unlink(missing_ok=True)
+
+
+def held_lines():
+    return sorted(f.stem for f in LEASE_DIR.glob("*.json")) if LEASE_DIR.is_dir() else []
+
+
+def commit_paths(paths, msg):
+    """只提交这几个文件（不带上别的暂存改动），返回新提交号；不在 git 仓库里返回 None。"""
+    root = repo_root(HOME)
+    if not root:
+        return None
+    rels = [str(Path(p).resolve().relative_to(root.resolve())) for p in paths if Path(p).exists()]
+    git(["add", "--", *rels], root)
+    p = subprocess.run(["git", "commit", "-q", "-m", msg, "--", *rels], cwd=str(root), capture_output=True, text=True)
+    if p.returncode != 0:
+        print(f"rk: 提交失败，请手工提交 {' '.join(rels)}：{(p.stderr or p.stdout).strip()[:300]}", file=sys.stderr)
+        return None
+    return git(["rev-parse", "HEAD"], root)[1]
+
+
+def head_commit():
+    root = repo_root(HOME)
+    rc, out = git(["rev-parse", "HEAD"], root) if root else (1, "")
+    return out if rc == 0 and out else "-"
+
+
+def behind_upstream():
+    """→ (落后几个提交, 上游名)；没有上游或取不到时 (0, None)。会先 git fetch。"""
+    root = repo_root(HOME)
+    if not root:
+        return 0, None
+    rc, up = git(["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}"], root)
+    if rc != 0:
+        return 0, None
+    try:
+        subprocess.run(["git", "fetch", "-q"], cwd=str(root), capture_output=True, timeout=60)
+    except (OSError, subprocess.SubprocessError):
+        pass
+    rc, n = git(["rev-list", "--count", "HEAD..@{u}"], root)
+    return (int(n) if rc == 0 and n.isdigit() else 0), up
+
+
+def stamp_line(line, path, body, out, me, extra_msg, frm=""):
+    fm = {"line": line, "holder": out["holder"] or "-", "token": str(out["token"]), "base": head_commit(),
+          "stamped": now(), "from": frm}
+    write_line(path, fm, body)
+    write_overview()
+    return commit_paths([path, HOME / "STATE.md"], f"研究线 {line}：{extra_msg}（推进权 #{out['token']}）")
+
+
+def cmd_line(a):
+    me = machine_name()[0]
+    if a.action == "config":
+        if a.collab is not None:
+            LOOP.mkdir(parents=True, exist_ok=True)
+            (LOOP / "collab").write_text(a.collab.strip() + "\n", encoding="utf-8")
+        cmd, src = collab_cmd()
+        print(f"协调主机：{' '.join(cmd) if cmd else '未配置'}（来自{src}）。本机代号 {me}。")
+        if cmd:
+            out, err = lease_call("show")
+            print("连通。" if out is not None else f"连不上：{err}")
+        return
+    if a.action == "status":
+        if a.write:
+            write_overview()
+            print(f"已写入 {HOME / 'STATE.md'}")
+            return
+        held = set(held_lines())
+        coord = {}
+        if a.lease:
+            out, err = lease_call("show")
+            coord = out or {}
+            if err:
+                print(f"（{err}）")
+        for f in line_files():
+            fm, body = read_line(f)
+            mark = "本机持有" if f.stem in held else ""
+            c = coord.get(f.stem)
+            if c and (c.get("holder") or "-") != (fm.get("holder") or "-"):
+                mark += f"；协调主机上是 {c.get('holder') or '无人持有'} #{c.get('token')}（先 git pull）"
+            print(f"{f.stem} | {fm.get('holder') or '-'} #{fm_token(fm)} | {body_field(body, '阶段') or '-'} | "
+                  f"{body_field(body, '在等什么') or '-'} | {mark or '-'}")
+        if not line_files():
+            print("还没有研究线：rk line new <线> --question \"<要回答的问题>\"")
+        return
+    if a.action == "beat":
+        lost = False
+        for line in held_lines():
+            c = cache_read(line) or {}
+            out, err = lease_call("renew", line, holder=me, token=c.get("token"))
+            if out is None:
+                print(f"{line}：{err}；本机记录的租期到 {c.get('expires')}")
+            elif out.get("ok"):
+                cache_write(line, out)
+                print(f"{line}：续租到 {out['expires']}（#{out['token']}）")
+            else:
+                cache_drop(line)
+                lost = True
+                print(f"{line}：已不再持有。{out.get('message')}")
+        if not held_lines() and not lost:
+            print("本机没有持有任何研究线。")
+        sys.exit(EXIT_FAILED if lost else EXIT_OK)
+
+    if not a.line:
+        die(f"rk line {a.action} <线>")
+    path = line_path(a.line)
+    if a.action == "new":
+        if path.exists():
+            die(f"state/{a.line}.md 已存在：要在这台机器推进用 rk line take {a.line}")
+        out, err = lease_call("acquire", a.line, holder=me)
+        if out is None:
+            die(err, EXIT_FAILED)
+        if not out.get("ok"):
+            die(out.get("message"), EXIT_TICK)
+        tpl = STATE_DIR / "TEMPLATE.md"
+        body = read_line(tpl)[1] if tpl.exists() else LINE_TEMPLATE
+        body = body.replace("<线>", a.line).replace("<问题>", a.question or "<…>").replace("<时间>", now())
+        st = HOME / "STATE.md"
+        if not line_files() and st.exists():
+            old = st.read_text(encoding="utf-8")
+            if GEN_MARK not in old and "<时间>" not in old:  # 手写过的 STATE.md：并进第一条线，不丢
+                body += f"\n## 迁移自 STATE.md（{now()}）\n\n" + re.sub(r"^(#+)", r"#\1", old, flags=re.M)
+        STATE_DIR.mkdir(parents=True, exist_ok=True)
+        cache_write(a.line, out)
+        c = stamp_line(a.line, path, body, out, me, f"新建，推进权归 {me}")
+        print(f"已建研究线 {a.line}：state/{a.line}.md，推进权 #{out['token']} 归本机（{me}），到 {out['expires']}"
+              + (f"；已提交 {c[:8]}" if c else "") + ("" if collab_cmd()[0] else "。没有配置协调主机，推进权只登记在本机；"
+                                                     "要跨机器交接先 rk line config --collab \"<命令>\""))
+        return
+    if not path.exists():
+        die(f"没有研究线 {a.line}（state/{a.line}.md）。别的机器建的先 git pull；新线用 rk line new。")
+    fm, body = read_line(path)
+    if a.action == "take":
+        behind, up = behind_upstream()
+        if behind:
+            die(f"本地落后 {up} {behind} 个提交：先 git pull，拿到上一个推进者的记录再接手。")
+        out, err = lease_call("acquire", a.line, holder=me, takeover=a.takeover, evidence=a.evidence,
+                              restamp=a.restamp)
+        if out is None:
+            die(err, EXIT_FAILED)
+        if not out.get("ok"):
+            die(out.get("message"), EXIT_TICK)
+        if out["token"] < fm_token(fm):  # 本机登记处不是这条线的权威（多半是没配协调主机）
+            die(f"仓库里 {a.line} 的推进权已到 #{fm_token(fm)}，{collab_cmd()[1]} 只给出 #{out['token']}："
+                f"这条线是经协调主机登记的。先 rk line config --collab \"<命令>\" 配上同一台协调主机再接手。")
+        cache_write(a.line, out)
+        if fm.get("holder") == me and fm_token(fm) == out["token"]:
+            print(f"{a.line}：推进权 #{out['token']} 在本机（{me}），续租到 {out['expires']}。")
+            return
+        if out["event"] == "续租":  # 协调主机上已经是本机（例如别的机器刚交接过来），仓库里还是旧记录
+            if fm_token(fm) < out["token"]:
+                cache_drop(a.line)
+                die(f"协调主机上 {a.line} 已交给本机（#{out['token']}），仓库里的记录还是 #{fm_token(fm)}："
+                    f"先 git pull 拿到交接记录，再 rk line take {a.line}。")
+        prev = fm.get("holder") if fm.get("holder") not in (None, "-", me) else ""
+        c = stamp_line(a.line, path, body, out, me, out["event"], prev)
+        print(f"{a.line}：{out['event']}，推进权 #{out['token']} 归本机（{me}），到 {out['expires']}"
+              + (f"；已提交 {c[:8]}" if c else ""))
+        return
+    if a.action == "release":
+        c = cache_read(a.line)
+        if not c:
+            die(f"本机没有 {a.line} 的推进权。")
+        out, err = lease_call("release", a.line, holder=me, token=c["token"])
+        if out is None:
+            die(err, EXIT_FAILED)
+        cache_drop(a.line)
+        if not out.get("ok"):
+            die(out.get("message"), EXIT_TICK)
+        cm = stamp_line(a.line, path, body, out, me, f"{me} 交出推进权")
+        print(f"{a.line}：已交出推进权（#{out['token']}）" + (f"；已提交 {cm[:8]}" if cm else ""))
+
+
+def handoff_summary(line, me, to, token, note, left_runs, body, src):
+    def tail(f, n):
+        try:
+            return "\n".join(Path(f).read_text(encoding="utf-8").splitlines()[-n:])
+        except OSError:
+            return "（没有）"
+    decide = "（没有）"
+    try:
+        m = re.search(r"^##[^\n]*需要你决定[^\n]*\n(.*?)(?=^## |\Z)", (HOME / "SUMMARY.md").read_text(encoding="utf-8"),
+                      re.S | re.M)
+        decide = m.group(1).strip() or "（没有）" if m else "（没有）"
+    except OSError:
+        pass
+    state = re.sub(r"^(#+)", r"##\1", body.strip(), flags=re.M)
+    runs = "\n".join(f"- {rid}：在 {me} 上跑完后，到接手的机器上 rk pull <{me} 的别名>:<研究目录> {rid}"
+                     for rid in left_runs) or "- 无"
+    return (f"# 交接：{line}（{me} → {to}，推进权 #{token}）\n\n"
+            f"- 时间：{now()}\n- 交接时的提交：{src}\n\n"
+            f"## 交接说明\n\n{note or '（没写。下面是原始记录，按它们接着做。）'}\n\n"
+            f"## 留在原机器上的运行\n\n{runs}\n\n"
+            f"## 需要用户决定的事（SUMMARY.md）\n\n{decide}\n\n"
+            f"## 接手步骤\n\n1. `git pull`\n2. `python3 research/tools/rk.py line take {line}`\n"
+            f"3. `/research:resume {line}`：先读本文件，再读 `state/{line}.md`\n\n"
+            f"## 这条线的状态（state/{line}.md 原文）\n\n{state}\n\n"
+            f"## 日志末尾（LOG.md 最后 30 行）\n\n{tail(HOME / 'LOG.md', 30)}\n")
+
+
+def cmd_handoff(a):
+    """把一条研究线交给另一台机器：前置检查 → 写交接摘要并盖章 → 推送 → 协调主机上转移推进权 →（可选）在目标机器上接手。
+    中途失败可以原样重跑：已完成的步骤会跳过。"""
+    me = machine_name()[0]
+    line, to = a.line, a.to
+    path = line_path(line)
+    if not MACHINE_NAME_RE.match(to or "") or to == me:
+        die("--to 是接手机器的代号（在那台机器上执行 rk id 查看），且不能是本机")
+    if not path.exists():
+        die(f"没有研究线 {line}")
+    root = repo_root(HOME)
+    if not root:
+        die("交接靠 git 搬运记录：研究目录要在 git 仓库里。")
+    if collab_cmd()[0] is None:
+        die("跨机器交接需要协调主机（两台机器都能连上的那台）：rk line config --collab \"ssh <别名> python3 <目录>/collab.py\"")
+    fm, body = read_line(path)
+    cache = cache_read(line)
+    resumed = bool(cache) and fm.get("holder") == to and fm.get("from") == me and fm_token(fm) == cache["token"] + 1
+    problems = []
+    transferred = False
+    if not cache:
+        problems.append(("这台机器没有这条线的推进权", f"rk line take {line}"))
+    else:
+        out, err = lease_call("show", line)
+        cur = (out or {}).get(line) or {}
+        if out is None:
+            problems.append((err, "检查 rk line config 里的协调主机，或稍后重试"))
+        elif cur.get("holder") == me and cur.get("token") == cache["token"]:
+            pass
+        elif resumed and cur.get("holder") == to and cur.get("token") == cache["token"] + 1:
+            transferred = True
+        else:
+            problems.append((f"协调主机上推进权是 {cur.get('holder') or '无人持有'} #{cur.get('token')}，"
+                             f"本机记录是 #{cache['token']}", f"git pull 之后 rk line status --lease 核对"))
+    _, st = git(["status", "--porcelain", "--", str(HOME)], root)
+    if st:
+        problems.append(("研究目录有没提交的改动：" + "；".join(st.splitlines()[:5]),
+                         f"git add {HOME.relative_to(root) if root in HOME.parents else HOME} && git commit -m \"交接前提交\""))
+    behind, up = behind_upstream()
+    if not up:
+        problems.append(("当前分支没有上游，接手的机器拿不到记录", "git push -u origin <分支>"))
+    elif behind:
+        problems.append((f"落后 {up} {behind} 个提交", "git pull"))
+    left = [rid for rid in run_ids() if load_meta(rid).get("line") == line and state_of(rid)[0] in ("running", "open")]
+    if left and not a.leave_runs:
+        problems.append((f"这条线还有运行没结束：{', '.join(left)}",
+                         "等它们结束（rk wait），或加 --leave-runs：留在本机跑完，接手的机器之后用 rk pull 拉回"))
+    remote = re.match(r"^([^/:]+):(.+)$", a.remote) if a.remote else None
+    if a.remote and not remote:
+        die("--remote 写成 <ssh 别名>:<目标机器上的研究目录>")
+    if remote:
+        host, rdir = remote.groups()
+        try:
+            p = subprocess.run(["ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=15", host,
+                                f"python3 {shlex.quote(rdir.rstrip('/') + '/tools/rk.py')} id"],
+                               capture_output=True, text=True, timeout=60)
+            m = re.search(r"本机代号：([a-z][a-z0-9]*)", p.stdout)
+            if not m:
+                problems.append((f"在 {host} 上没跑通 rk：{(p.stderr or p.stdout).strip()[:200]}",
+                                 f"确认 {host} 上有这个仓库、研究目录是 {rdir}"))
+            elif m.group(1) != to:
+                problems.append((f"{host} 的机器代号是 {m.group(1)}，不是 {to}", f"改用 --to {m.group(1)}"))
+        except (OSError, subprocess.SubprocessError) as e:
+            problems.append((f"连不上 {host}：{e}", "检查 ssh 别名；或不带 --remote，到目标机器上手工接手"))
+    print(f"交接 {line}：{me} → {to}")
+    for why, fix in problems:
+        print(f"  ✗ {why}\n    修复：{fix}")
+    if problems:
+        sys.exit(EXIT_FAILED)
+    print("  ✓ 前置检查通过" + ("（接着上次没完成的交接）" if resumed else ""))
+    if a.dry_run:
+        return
+    token = cache["token"] + 1
+    if not resumed:
+        HANDOFFS.mkdir(parents=True, exist_ok=True)
+        src = head_commit()
+        summ = HANDOFFS / f"{datetime.datetime.now():%Y%m%d-%H%M%S}-{line}-{me}-{to}.md"
+        summ.write_text(handoff_summary(line, me, to, token, a.note, left, body, src), encoding="utf-8")
+        write_line(path, {"line": line, "holder": to, "token": str(token), "base": src, "stamped": now(), "from": me}, body)
+        write_overview()
+        if not commit_paths([path, summ, HOME / "STATE.md"], f"研究线 {line}：交接给 {to}（推进权 #{token}）"):
+            die("交接记录没能提交，交接没有进行。")
+        print(f"  ✓ 交接摘要 {summ.relative_to(HOME)}，已盖章 #{token} 并提交")
+    try:
+        p = subprocess.run(["git", "push", "-q"], cwd=str(root), capture_output=True, text=True, timeout=180)
+        pushed = p.returncode == 0
+        perr = (p.stderr or "").strip()[:300]
+    except (OSError, subprocess.SubprocessError) as e:
+        pushed, perr = False, str(e)
+    if not pushed:
+        die(f"推送失败：{perr}。交接记录已在本地提交；网络好了原样重跑这条 rk handoff 命令。", EXIT_FAILED)
+    print("  ✓ 已推送")
+    if not transferred:
+        out, err = lease_call("transfer", line, holder=me, token=cache["token"], to=to)
+        if out is None or not out.get("ok"):
+            die(f"协调主机没完成转移：{err or out.get('message')}。记录已推送；原样重跑这条命令即可。", EXIT_FAILED)
+    cache_drop(line)
+    print(f"  ✓ 推进权 #{token} 已交给 {to}；本机不再写 state/{line}.md")
+    if remote:
+        host, rdir = remote.groups()
+        cmd = (f"cd {shlex.quote(rdir)} && git pull -q --ff-only && "
+               f"python3 tools/rk.py line take {shlex.quote(line)}")
+        try:
+            p = subprocess.run(["ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=15", host, cmd],
+                               capture_output=True, text=True, timeout=180)
+            ok = p.returncode == 0
+            msg = (p.stdout + p.stderr).strip()[:300]
+        except (OSError, subprocess.SubprocessError) as e:
+            ok, msg = False, str(e)
+        print(f"  {'✓' if ok else '✗'} {host} 上接手：{msg}")
+        if not ok:
+            print(f"    到 {host} 上手工执行：git pull && python3 research/tools/rk.py line take {line}")
+    else:
+        print(f"接手：到 {to} 上执行 git pull && python3 research/tools/rk.py line take {line}，然后 /research:resume {line}")
+    if not held_lines():
+        print("本机已不持有任何研究线：研究循环可以关掉（rk loop off）。在跑的运行照常跑完。")
+
+
 # ---------------------------------------------------------------- loop
 
 
@@ -1005,6 +1543,7 @@ def main():
     p.add_argument("--allow-dirty", action="store_true")
     p.add_argument("--cwd")
     p.add_argument("--note")
+    p.add_argument("--line", help="这次运行属于哪条研究线（交接时据此检查有没有没跑完的运行）；默认取环境变量 RESEARCH_LINE")
     p.set_defaults(fn=cmd_run)
 
     p = sub.add_parser("_supervise")
@@ -1042,6 +1581,27 @@ def main():
     p.add_argument("--by", help="record：审计员（默认 research:auditor）")
     p.add_argument("--note")
     p.set_defaults(fn=cmd_audit)
+
+    p = sub.add_parser("line", help="研究线与推进权：new / take / beat / release / status / config")
+    p.add_argument("action", choices=["new", "take", "beat", "release", "status", "config"])
+    p.add_argument("line", nargs="?")
+    p.add_argument("--question", help="new：这条线要回答的问题")
+    p.add_argument("--takeover", action="store_true", help="take：接管已到期、持有者失联的推进权")
+    p.add_argument("--evidence", help="take --takeover：你确认对方已停下的证据")
+    p.add_argument("--restamp", action="store_true", help="take：持有者重新盖章（核对合并进来的旧写入之后）")
+    p.add_argument("--write", action="store_true", help="status：重新生成 STATE.md 总览")
+    p.add_argument("--lease", action="store_true", help="status：同时核对协调主机上的推进权")
+    p.add_argument("--collab", help="config：调用协调主机上 collab.py 的命令前缀，例如 \"ssh gpu-a python3 /shared/collab.py\"")
+    p.set_defaults(fn=cmd_line)
+
+    p = sub.add_parser("handoff", help="把一条研究线交给另一台机器")
+    p.add_argument("line")
+    p.add_argument("--to", required=True, help="接手机器的代号（在那台机器上 rk id 查看）")
+    p.add_argument("--remote", help="<ssh 别名>:<那台机器上的研究目录>：交接后直接在那里 git pull 并接手")
+    p.add_argument("--note", help="给接手者的几句话：做到哪、下一步、要注意什么")
+    p.add_argument("--leave-runs", action="store_true", help="这条线没跑完的运行留在本机跑完")
+    p.add_argument("--dry-run", action="store_true", help="只做前置检查")
+    p.set_defaults(fn=cmd_handoff)
 
     p = sub.add_parser("check", help="核验记录")
     p.set_defaults(fn=cmd_check)

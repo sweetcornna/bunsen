@@ -453,6 +453,22 @@ has "已归档" "有内容被归档"
 grep -q "并发写入" "$shared"/COLLAB-archive-202602.md && ok "旧条目进了归档文件" || no "归档文件缺内容"
 grep -q "更早的记录见同目录 COLLAB-archive-202602.md" "$shared/COLLAB.md" && ok "原处留了指针" || no "原处没有指针"
 expect 0 "归档后文档仍可写" co log --session A --kind 教训 "归档后追加"
+lc() { python3 "$shared/collab.py" lease "$@"; }
+expect 0 "取得推进权" lc acquire --line l1 --holder mac
+has "持有者 mac，编号 #1" "编号从 1 开始"
+expect 3 "别人持有时拒绝" lc acquire --line l1 --holder srva
+expect 0 "持有者再取得只续租" lc acquire --line l1 --holder mac
+has "#1" "编号不变"
+expect 3 "编号不对不能续租" lc renew --line l1 --holder mac --token 9
+expect 0 "交接" lc transfer --line l1 --holder mac --token 1 --to srva
+has "#2" "交接编号加一"
+expect 3 "交出后旧持有者不能再续" lc renew --line l1 --holder mac --token 1
+expect 0 "新持有者交出" lc release --line l1 --holder srva --token 2
+expect 0 "交出后可以取得" lc acquire --line l1 --holder mac
+has "#3" "编号只增不减"
+expect 2 "线名不合规" lc acquire --line "a b" --holder mac
+expect 0 "show --json" lc show --json
+printf '%s' "$out" | jq -e '.l1.holder == "mac" and .l1.token == 3' >/dev/null && ok "JSON 给出持有者和编号" || no "JSON 不对"
 
 echo "== 两台机器各跑一批，经汇合点合并后 rk check 通过"
 hub="$tmp/hub.git"
@@ -512,6 +528,116 @@ idc=$( (cd "$tmp/ma" && env -u CLAUDE_CODE_SESSION_ID RK_MACHINE_NAME=srva RK_MA
 (cd "$tmp/ma" && env -u CLAUDE_CODE_SESSION_ID RK_MACHINE_NAME=srva RK_MACHINE_ID=box-c python3 research/tools/rk.py run "$idc" --explore --manual >/dev/null)
 expect 0 "两台机器用了同一代号时警告" ra check
 has "被 2 台不同的机器用过" "指出代号重复"
+
+echo "== 研究线：推进权与交接（本机 → 服务器 → 拉回）"
+coord="$tmp/coord"
+mkdir -p "$coord" && cp "$root/templates/research/tools/collab.py" "$coord/"
+hub2="$tmp/hub2.git"
+git init -q --bare "$hub2"
+seed2="$tmp/seed2"
+mkdir -p "$seed2" && git -C "$seed2" init -q -b main
+bash "$root/scripts/scaffold.sh" "$seed2" >/dev/null
+printf '# 当前状态\n\n- **阶段**：运行中\n- 手写的进度：做完了基线\n' > "$seed2/research/STATE.md"
+git -C "$seed2" -c user.email=t@example.invalid -c user.name=t add -A
+git -C "$seed2" -c user.email=t@example.invalid -c user.name=t commit -qm init
+git -C "$seed2" push -q "$hub2" main
+for m in pa pb; do
+  git clone -q "$hub2" "$tmp/$m" 2>/dev/null
+  git -C "$tmp/$m" config user.email "$m@example.invalid"; git -C "$tmp/$m" config user.name "$m"; git -C "$tmp/$m" config pull.rebase false
+done
+la() { (cd "$tmp/pa" && env -u CLAUDE_CODE_SESSION_ID RK_MACHINE_NAME=mac RK_MACHINE_ID=box-a RK_COLLAB="python3 $coord/collab.py" python3 research/tools/rk.py "$@"); }
+lb() { (cd "$tmp/pb" && env -u CLAUDE_CODE_SESSION_ID RK_MACHINE_NAME=srva RK_MACHINE_ID=box-b RK_COLLAB="python3 $coord/collab.py" python3 research/tools/rk.py "$@"); }
+lbf() { (cd "$tmp/pb" && env -u CLAUDE_CODE_SESSION_ID RK_MACHINE_NAME=srva RK_MACHINE_ID=box-b RK_COLLAB="env COLLAB_NOW='2099-01-01 00:00:00' python3 $coord/collab.py" python3 research/tools/rk.py "$@"); }
+gs() { printf '{"tool_name":"Edit","tool_input":{"file_path":"%s"}}' "$2" | CLAUDE_PROJECT_DIR="$1" bash "$root/hooks/guard-state.sh"; }
+sa_="$tmp/pa/research/state/alpha.md"; sb_="$tmp/pb/research/state/alpha.md"
+expect 0 "新建研究线并取得推进权" la line new alpha --question "方法 A 是否优于基线"
+has "推进权 #1 归本机（mac）" "报告编号与持有者"
+has "已提交" "盖章后自动提交"
+grep -q "^holder: mac" "$sa_" && grep -q "^token: 1" "$sa_" && ok "state 文件开头记着推进权" || no "缺推进权信息"
+grep -q "手写的进度：做完了基线" "$sa_" && ok "手写的 STATE.md 并进了第一条线" || no "旧 STATE.md 内容丢了"
+grep -q "rk:generated" "$tmp/pa/research/STATE.md" && grep -q "| alpha | mac | #1 |" "$tmp/pa/research/STATE.md" && ok "STATE.md 变成生成的总览" || no "总览没生成"
+expect 2 "同名的线不能再建" la line new alpha
+expect 0 "持有者可以改 state 文件" gs "$tmp/pa" "$sa_"
+expect 0 "模板不受限" gs "$tmp/pa" "$tmp/pa/research/state/TEMPLATE.md"
+expect 0 "别的文件不受限" gs "$tmp/pa" "$tmp/pa/research/LOG.md"
+git -C "$tmp/pa" push -q origin HEAD 2>/dev/null
+git -C "$tmp/pb" pull -q --no-edit origin main
+expect 2 "没有推进权的机器改 state 文件被拦下" gs "$tmp/pb" "$sb_"
+has "line take alpha" "告诉它怎么取得"
+expect 3 "别人持有且没到期时不能取得" lb line take alpha
+has "推进权在 mac" "说明在谁手里"
+echo "- 本机做到第 3 步" >> "$sa_"
+wid=$(la id w)
+la run "$wid" --explore --manual --line alpha >/dev/null
+expect 1 "交接前置检查：列出所有问题" la handoff alpha --to srva --dry-run
+has "没提交的改动" "未提交"
+has "还有运行没结束" "运行没结束"
+has "修复：" "每条带修复办法"
+la done "$wid" >/dev/null
+git -C "$tmp/pa" add -A && git -C "$tmp/pa" commit -qm "第 3 步"
+expect 2 "接手机器不能是自己" la handoff alpha --to mac
+expect 0 "前置检查通过" la handoff alpha --to srva --dry-run
+has "前置检查通过" "说明通过"
+expect 0 "交接给服务器" la handoff alpha --to srva --note "做到第 3 步；下一步跑 r02"
+has "已交给 srva" "报告转移"
+ls "$tmp/pa/research/handoffs/"*-alpha-mac-srva.md >/dev/null 2>&1 && grep -q "下一步跑 r02" "$tmp/pa/research/handoffs/"*-alpha-mac-srva.md && ok "写了交接摘要" || no "缺交接摘要"
+[ ! -e "$tmp/pa/research/.loop/leases/alpha.json" ] && ok "本机不再持有" || no "本机还记着推进权"
+expect 2 "交出之后本机改 state 文件被拦下" gs "$tmp/pa" "$sa_"
+expect 2 "接手前没 git pull 时拒绝" lb line take alpha
+has "先 git pull" "提示先拉"
+git -C "$tmp/pb" pull -q --no-edit origin main
+expect 0 "服务器接手" lb line take alpha
+has "推进权 #2 在本机（srva）" "编号加一"
+grep -q "本机做到第 3 步" "$sb_" && ok "状态没丢" || no "状态丢了"
+expect 0 "接手后可以改" gs "$tmp/pb" "$sb_"
+echo "- 服务器做到第 5 步" >> "$sb_"
+git -C "$tmp/pb" add -A && git -C "$tmp/pb" commit -qm "第 5 步"
+expect 0 "拉回本机" lb handoff alpha --to mac
+git -C "$tmp/pa" pull -q --no-edit origin main
+expect 0 "本机重新接手" la line take alpha
+has "#3" "编号再加一"
+grep -q "服务器做到第 5 步" "$sa_" && ok "服务器上的进度带回来了" || no "服务器的进度丢了"
+expect 0 "来回交接后 rk check 通过" la check
+hasnt "[错误]" "没有错误"
+expect 0 "line status" la line status --lease
+has "alpha | mac #3" "列出持有者和编号"
+hasnt "先 git pull" "与协调主机一致"
+git -C "$tmp/pa" push -q origin HEAD 2>/dev/null
+
+echo "== 研究线：失联的旧推进者被接管后还在写"
+git -C "$tmp/pb" pull -q --no-edit origin main
+expect 3 "没到期不能接管" lb line take alpha --takeover --evidence "x"
+expect 3 "到期了也要带证据" lbf line take alpha
+has "--takeover --evidence" "说明接管要证据"
+expect 0 "到期后带证据接管" lbf line take alpha --takeover --evidence "mac 一天没心跳，会话不在"
+has "接管（原持有者 mac #3）" "记下接管"
+git -C "$tmp/pb" push -q origin HEAD 2>/dev/null
+echo "- 失联期间 mac 写的一行" >> "$sa_"
+git -C "$tmp/pa" commit -qam "mac 失联时写的"
+git -C "$tmp/pa" pull -q --no-edit origin main 2>/dev/null
+expect 0 "合并没有冲突" git -C "$tmp/pa" diff --quiet HEAD
+expect 1 "rk check 拦下旧推进者的写入" la check
+has "接手时没有看到它们" "指出双写"
+has "--restamp" "给出整理办法"
+expect 1 "旧推进者续租时得知已失去推进权" la line beat
+has "已不再持有" "说明失去推进权"
+git -C "$tmp/pa" push -q origin HEAD 2>/dev/null
+git -C "$tmp/pb" pull -q --no-edit origin main
+expect 0 "持有者核对后重新盖章" lbf line take alpha --restamp
+has "#5" "编号加一"
+expect 0 "重新盖章后 rk check 通过" lb check
+hasnt "[错误]" "没有错误"
+expect 0 "交出推进权" lbf line release alpha
+expect 0 "交出后的总览" lb line status
+has "alpha | - #5" "无人持有"
+lb line status --write >/dev/null
+expect 0 "总览与 state 一致" lb check
+hasnt "STATE.md 总览与 state/ 不一致" "不提示总览过期"
+expect 2 "没配协调主机的机器不能接手经协调主机登记的线" bash -c "cd '$tmp/pb' && RK_MACHINE_NAME=srva python3 research/tools/rk.py line take alpha"
+has "配上同一台协调主机" "说明要配协调主机"
+[ ! -e "$tmp/pb/research/.loop/leases/alpha.json" ] && ok "没有留下本机记录" || no "留下了本机记录"
+expect 2 "没有协调主机时不能跨机器交接" bash -c "cd '$tmp/pb' && RK_MACHINE_NAME=srva python3 research/tools/rk.py handoff alpha --to mac"
+has "需要协调主机" "说明原因"
 
 echo
 echo "通过 $pass，失败 $fail"

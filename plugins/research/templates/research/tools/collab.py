@@ -22,7 +22,14 @@
     msg --to 对象 "内容；希望何时前答复" | reply --match 关键字 "回复"
     stale [--grace 30]                     列出可能过期的认领（是否接替还要看 nvidia-smi）
     archive [--max-lines 500] [--days 14]  归档已释放的卡位和旧条目
+    lease acquire|renew|release|transfer|show --line L --holder 机器 [--token N] [--to 机器]
+                                           研究线推进权（租约）；由 rk line / rk handoff 调用
+
+研究线推进权存在同目录的 LEASES.json（--leases 或环境变量 COLLAB_LEASES 可改），与 COLLAB.md 分开加锁。
+同一条线同一时刻只有一个持有者；编号只增不减，取得、交接、接管、重新盖章都加一，续租和交出不变。
+时间只看协调主机的时钟，持有者之间的时钟差不影响判断。
 """
+import json
 import argparse
 import datetime
 import fcntl
@@ -532,6 +539,137 @@ def cmd_archive(a, doc):
     print(f"已归档 {len(drop)} 行到 {arch}")
 
 
+# ---------------------------------------------------------------- 研究线推进权
+
+
+LINE_RE = re.compile(r"^[\w-]{1,32}$")
+
+
+class Leases:
+    """LEASES.json 的加锁读写：{线: {holder, token, expires, updated, history}}。"""
+
+    def __init__(self, path):
+        self.path = Path(path)
+        self.lock_path = self.path.with_name(self.path.name + ".lock")
+
+    def __enter__(self):
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        self.fh = open(self.lock_path, "a+")
+        deadline = time.time() + 60
+        while True:
+            try:
+                fcntl.flock(self.fh, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                break
+            except BlockingIOError:
+                if time.time() > deadline:
+                    die(f"60 秒内没拿到锁 {self.lock_path}；稍后重试。")
+                time.sleep(0.2)
+        try:
+            self.data = json.loads(self.path.read_text(encoding="utf-8")) if self.path.exists() else {}
+        except ValueError:
+            fcntl.flock(self.fh, fcntl.LOCK_UN)
+            die(f"{self.path} 不是合法的 JSON；修好之前不发放推进权。")
+        return self
+
+    def save(self):
+        tmp = self.path.with_name(self.path.name + f".tmp.{os.getpid()}")
+        tmp.write_text(json.dumps(self.data, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+        os.replace(tmp, self.path)
+
+    def __exit__(self, *exc):
+        fcntl.flock(self.fh, fcntl.LOCK_UN)
+        self.fh.close()
+
+
+def lease_out(a, line, rec, event, code=0, msg=""):
+    out = {"line": line, "holder": rec.get("holder"), "token": rec.get("token", 0), "expires": rec.get("expires"),
+           "now": now(), "event": event, "ok": code == 0, "message": msg}
+    if a.json:
+        print(json.dumps(out, ensure_ascii=False))
+    else:
+        print(msg or f"{line}：{event}；持有者 {out['holder'] or '无'}，编号 #{out['token']}，到期 {out['expires'] or '-'}")
+    sys.exit(code)
+
+
+def cmd_lease(a, _doc):
+    path = a.leases or os.environ.get("COLLAB_LEASES") or str(Path(a.file).resolve().with_name("LEASES.json"))
+    if a.action == "show":
+        data = json.loads(Path(path).read_text(encoding="utf-8")) if Path(path).exists() else {}
+        rows = {k: v for k, v in data.items() if not a.line or k == a.line}
+        if a.json:
+            print(json.dumps({k: {x: v.get(x) for x in ("holder", "token", "expires", "updated")} for k, v in rows.items()},
+                             ensure_ascii=False))
+        else:
+            for k, v in sorted(rows.items()):
+                print(f"{k} | {v.get('holder') or '（无人持有）'} | #{v.get('token', 0)} | 到期 {v.get('expires') or '-'}")
+            if not rows:
+                print("还没有登记任何研究线。")
+        return
+    line, holder = a.line or "", a.holder or ""
+    if not LINE_RE.match(line):
+        die("--line 只用字母、数字、下划线和连字符，最多 32 个字符")
+    if not re.fullmatch(r"[a-z][a-z0-9]{1,11}", holder):
+        die("--holder 是持有者的机器代号（rk id 给出的那个）")
+    ttl = datetime.timedelta(minutes=a.ttl)
+    t, tn = now(), now_dt()
+
+    def hist(rec, event, note=""):
+        rec.setdefault("history", []).append({"t": t, "event": event, "holder": rec.get("holder"),
+                                              "token": rec.get("token"), "note": note})
+        rec["history"] = rec["history"][-50:]
+        rec["updated"] = t
+
+    with Leases(path) as L:
+        rec = L.data.get(line) or {"holder": None, "token": 0, "expires": None}
+        cur, tok = rec.get("holder"), int(rec.get("token") or 0)
+        exp = parse_time(rec["expires"]) if rec.get("expires") else None
+        live = cur is not None and exp is not None and tn < exp
+        mine = cur == holder and (a.token is None or a.token == tok)
+
+        if a.action == "acquire":
+            if cur is None:
+                rec.update(holder=holder, token=tok + 1)
+                event = "取得"
+            elif cur == holder:
+                if a.restamp:
+                    rec["token"] = tok + 1
+                event = "重新盖章" if a.restamp else "续租"
+            elif live:
+                lease_out(a, line, rec, "被占用", 3,
+                          f"{line} 的推进权在 {cur}（#{tok}，到 {rec['expires']}）。要换机器推进，请持有者用 rk handoff 交接；"
+                          f"它失联且到期之后，才能带证据接管。")
+            elif not (a.takeover and a.evidence):
+                lease_out(a, line, rec, "已过期", 3,
+                          f"{line} 的推进权在 {cur}（#{tok}），{rec['expires']} 已到期没续。确认它确实停了（会话、进程都不在）之后，"
+                          f"加 --takeover --evidence \"<时间和你看到的情况>\" 接管；编号加一，对方旧编号的写入会被 rk check 拦下。")
+            else:
+                rec.update(holder=holder, token=tok + 1)
+                event = f"接管（原持有者 {cur} #{tok}）"
+            rec["expires"] = (tn + ttl).strftime(TIME_FMT)
+            hist(rec, event, clean(a.evidence) if a.evidence else "")
+        else:
+            if not mine or a.token is None:
+                lease_out(a, line, rec, "不是持有者", 3,
+                          f"{line} 的推进权现在是 {cur or '无人持有'}（#{tok}），不是 {holder}" +
+                          (f"（#{a.token}）" if a.token is not None else "") + "。你已经不再持有：停下对这条线的写入，先 git pull 看现状。")
+            if a.action == "renew":
+                rec["expires"] = (tn + ttl).strftime(TIME_FMT)
+                event = "续租"
+            elif a.action == "release":
+                rec.update(holder=None, expires=None)
+                event = "交出"
+            else:  # transfer
+                to = a.to or ""
+                if not re.fullmatch(r"[a-z][a-z0-9]{1,11}", to) or to == holder:
+                    die("--to 是接手机器的代号，且不能是自己")
+                rec.update(holder=to, token=tok + 1, expires=(tn + ttl).strftime(TIME_FMT))
+                event = f"交接（{holder} → {to}）"
+            hist(rec, event)
+        L.data[line] = rec
+        L.save()
+    lease_out(a, line, rec, event)
+
+
 def main():
     ap = argparse.ArgumentParser(prog="collab", description="协作文档的唯一写入口")
     ap.add_argument("--file", default=os.environ.get("COLLAB_FILE") or str(Path(__file__).resolve().parent / "COLLAB.md"))
@@ -599,8 +737,21 @@ def main():
     p.add_argument("--max-lines", type=int, default=500)
     p.add_argument("--days", type=int, default=14)
     p.add_argument("--force", action="store_true")
+    p = add("lease", cmd_lease, help="研究线推进权")
+    p.add_argument("action", choices=["acquire", "renew", "release", "transfer", "show"])
+    p.add_argument("--line")
+    p.add_argument("--holder")
+    p.add_argument("--token", type=int)
+    p.add_argument("--to")
+    p.add_argument("--ttl", type=int, default=720, help="租期（分钟），默认 12 小时")
+    p.add_argument("--takeover", action="store_true")
+    p.add_argument("--evidence")
+    p.add_argument("--restamp", action="store_true", help="持有者自己把编号加一（合并进旧写入、核对之后）")
+    p.add_argument("--json", action="store_true")
+    p.add_argument("--leases", default=argparse.SUPPRESS)
 
     a = ap.parse_args()
+    a.leases = getattr(a, "leases", None)
     a.fn(a, Doc(a.file))
 
 

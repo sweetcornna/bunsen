@@ -23,7 +23,8 @@ claude plugin install research@research-plugin --scope user
 | 命令 | 作用 |
 |---|---|
 | `/research:start <研究目标>` | 建研究目录、定项目设定（只在这一步集中提问一次）、接入算力、初始调研与发散，然后持续推进 |
-| `/research:resume [补充指示]` | 会话重启或换会话后，从状态文件接着做 |
+| `/research:resume [线] [补充指示]` | 会话重启、换会话或换机器后，从状态文件接着做 |
+| `/research:handoff <线> <机器代号>` | 把一条研究线交给另一台机器（本机 ↔ 服务器）：前置检查、交接摘要、推送、转移推进权 |
 | `/research:status` | 几行话报告现状和需要你决定的事（只读） |
 | `/research:stop` | 记录现状、关掉循环；在跑的运行默认让它跑完 |
 | `/research:ideation` | 单独做一轮发散与收敛 |
@@ -69,7 +70,9 @@ claude plugin install research@research-plugin --scope user
 | 文件 | 用途 |
 |---|---|
 | `PROJECT.md` | 项目设定：目标、研究类型、红线、算力、预算与停机条件 |
-| `STATE.md` | 统筹者的唯一记忆：阶段、在等什么、下一步 |
+| `state/<线>.md` | 每条研究线的状态：阶段、在等什么、下一步；只由持有推进权的机器写 |
+| `STATE.md` | 各线的总览（`rk line status --write` 生成）；还没有研究线的旧项目里是统筹者手写的状态 |
+| `handoffs/` | 交接摘要，每次交接一份 |
 | `SUMMARY.md` | 给你的小结，含“需要你决定的事” |
 | `OVERVIEW.md` | 总览表，每个数字带来源 |
 | `LEDGER.md` | 结论账本（只追加） |
@@ -80,6 +83,14 @@ claude plugin install research@research-plugin --scope user
 | `audits/` | `rk audit record` 写的审计记录（JSON）和审计员报告原文 |
 | `runs/<运行ID>/` | 运行记录：meta.json、metrics.json、exit_code、log.txt；远程主机上的用 `rk pull` 拉回 |
 | `tools/rk.py`、`tools/collab.py` | 工具，随项目入库，本机和远程主机用同一份 |
+
+## 本机和服务器之间交接
+
+研究项目是一个 git 仓库，本机和服务器各有一份检出，经同一个远端汇合。一条研究线同一时刻只由一台机器推进，这份推进权登记在两台机器都能连上的协调主机上（`collab.py lease`，编号只增不减）；`rk line config --collab "ssh <别名> python3 <目录>/collab.py"` 告诉 rk 去哪里找它。
+
+- `rk line new <线>` 建线并取得推进权；`rk line take <线>` 在这台机器上接手；`rk line status` 查看各线在哪。
+- `/research:handoff <线> <机器代号>`（命令是 `rk handoff`）先做前置检查（没提交的改动、没推送、没跑完的运行、目标机器连不上……逐条给出修复办法），再写交接摘要、推送、转移推进权；接手的机器 `git pull`、`rk line take`、`/research:resume`。中途失败可以原样重跑。
+- 没有推进权的机器改 `state/<线>.md` 会被钩子拦下。失联的旧推进者在被接管之后还写了、合并进来的，`rk check` 按提交历史查出来，要求持有者核对后重新盖章。
 
 ## 共享实验室算力（可选）
 

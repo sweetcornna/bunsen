@@ -18,7 +18,7 @@ while IFS= read -r -d '' f; do
     created=$((created + 1))
   fi
 done < <(find "$src" -type f ! -name '.DS_Store' ! -name '*.pyc' -print0)
-mkdir -p "$home/runs" "$home/results" "$home/prereg" "$home/strategy" "$home/audits"
+mkdir -p "$home/runs" "$home/results" "$home/prereg" "$home/strategy" "$home/audits" "$home/state" "$home/handoffs"
 chmod +x "$home/tools/"*.py 2>/dev/null || true
 
 if [ "$rel" != "research" ]; then

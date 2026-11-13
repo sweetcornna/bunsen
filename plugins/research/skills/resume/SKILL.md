@@ -1,6 +1,6 @@
 ---
 name: resume
-description: 接续一个已有的研究循环。从研究目录的状态文件恢复上下文，核对在跑的运行与已认领的算力，然后从“下一步”继续。会话重启、换了会话或上下文被压缩之后使用。用法：/research:resume [补充指示]
+description: 接续一个已有的研究循环。从研究目录的状态文件恢复上下文，取得本机要推进的研究线的推进权，核对在跑的运行与已认领的算力，然后从“下一步”继续。会话重启、换了会话、换了机器（交接）或上下文被压缩之后使用。用法：/research:resume [线] [补充指示]
 argument-hint: "[给统筹者的补充指示]"
 disable-model-invocation: true
 ---
@@ -21,7 +21,15 @@ $ARGUMENTS
 
 研究目录默认是 `research/`（项目里有 `.claude/research-home` 时以它为准）。没有 `PROJECT.md` 就说明这里还没有研究项目，告诉用户用 `/research:start`，然后停下。
 
-按顺序读：`PROJECT.md` → `STATE.md` → `SUMMARY.md` → `OVERVIEW.md` → `LEDGER.md` → `LOG.md` 末尾 → `LESSONS.md` → `IDEAS.md`；用共享算力时再读协作文档。
+先 `git pull`，拿到别的机器推送的记录。
+
+**研究线**：执行 `rk line status --lease`。
+
+- 还没有 `state/` 的旧项目：执行 `rk line new main --question "<PROJECT.md 的研究目标>"`。手写的 `STATE.md` 会整份并进 `state/main.md`，`STATE.md` 改为生成的总览。
+- 本机要推进的线（用户指明的线；否则本机原本持有的线；刚交接给本机的线）逐条 `rk line take <线>`。被拒绝时照提示做：别的机器还持有就不抢，告诉用户可以让那台机器 `/research:handoff`；它失联且到期了，确认后才 `--takeover --evidence`。
+- 刚交接过来的线，先读 `handoffs/` 里最新一份发给本机的交接摘要。
+
+然后按顺序读：`PROJECT.md` → 本机持有的 `state/<线>.md` → `STATE.md`（总览）→ `SUMMARY.md` → `OVERVIEW.md` → `LEDGER.md` → `LOG.md` 末尾 → `LESSONS.md` → `IDEAS.md`；用共享算力时再读协作文档。
 
 ## 3. 对账
 
@@ -36,4 +44,4 @@ $ARGUMENTS
 python3 research/tools/rk.py loop on
 ```
 
-用一两句话告诉用户恢复到了哪里（阶段、在跑什么、接下来做什么），然后直接从 `STATE.md` 的“下一步”继续，不等确认。用户的补充指示优先于文件里原定的下一步；与协议红线冲突时说明冲突并给出不越线的做法。
+用一两句话告诉用户恢复到了哪里（阶段、在跑什么、接下来做什么），然后直接从本机持有的 `state/<线>.md` 的“下一步”继续，不等确认。用户的补充指示优先于文件里原定的下一步；与协议红线冲突时说明冲突并给出不越线的做法。
