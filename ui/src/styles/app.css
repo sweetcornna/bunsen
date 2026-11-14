@@ -508,6 +508,11 @@ kbd { color: var(--fg-2); font-family: var(--font-ui); font-size: var(--fs-xs); 
 .art-meta { display: flex; justify-content: space-between; gap: 6px; padding: 0 2px; color: var(--fg-2); font-size: var(--fs-xs); white-space: nowrap; }
 .prov { display: inline-flex; align-items: center; gap: 4px; height: 20px; padding: 0 7px; border: 0; border-radius: 10px; background: var(--tint-strong); color: var(--fg-1); font-family: var(--font-mono); font-size: var(--fs-xs); outline: 1px dashed var(--line-strong); outline-offset: -1px; }
 .prov:hover { color: var(--fg-0); }
+/* 精确对应（outputs.json 里记着）用实线，按修改时间推断的保留虚线 */
+.prov.exact { outline: 0; box-shadow: inset 0 0 0 1px var(--line-strong); }
+/* .prov 自己用 outline 画虚线，会压掉全局的键盘焦点样式，这里补回来（审查 P4F1-06） */
+.prov:focus-visible, .prov.exact:focus-visible { outline: 2px solid color-mix(in srgb, var(--accent) 70%, transparent); outline-offset: 2px; }
+.art-flag { position: absolute; left: 6px; bottom: 6px; padding: 1px 6px; border-radius: 4px; background: color-mix(in srgb, var(--bg-1) 70%, var(--warn) 30%); color: var(--fg-0); font-size: 10px; }
 
 /* 科研 */
 .kpis { display: flex; align-items: center; gap: 4px; flex: none; padding: 8px 8px 8px 6px; border-bottom: 1px solid var(--line-faint); }
@@ -535,6 +540,96 @@ button.ev:hover:not(:disabled) { background: var(--accent-soft); color: var(--ac
 .idea-facts dt { color: var(--fg-2); }
 .run-facts { display: flex; flex-direction: column; gap: 8px; flex: none; padding: 10px 12px; border-bottom: 1px solid var(--line-faint); }
 .run-cmd { display: block; padding: 7px 10px; border-radius: var(--r-md); background: var(--sunken); color: var(--fg-1); font-size: var(--fs-xs); line-height: 1.5; white-space: pre-wrap; overflow-wrap: anywhere; max-height: 84px; overflow: auto; }
+/* 页签放不下时横向滚动，留一条细滚动条，看得出后面还有（审查 P4F1-05） */
+.tabs-scroll { overflow-x: auto; scrollbar-width: thin; scrollbar-color: var(--line-strong) transparent; }
+.tabs-scroll::-webkit-scrollbar { height: 4px; }
+.tabs-scroll::-webkit-scrollbar-thumb { border-radius: 2px; background: var(--line-strong); }
+.ev.t-ok { color: var(--ok); } .ev.t-warn { color: var(--warn); } .ev.t-err { color: var(--err); }
+.ev.text.t-ok { box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--ok) 40%, transparent); }
+.ev.text.t-err { box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--err) 45%, transparent); }
+
+/* 可信度 */
+.trust { display: flex; flex-direction: column; gap: 18px; padding: 12px 12px 36px; container: trust / inline-size; }
+.trust > .note { margin: 0; }
+.trust-sum { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 6px 12px; }
+.stats { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 14px; color: var(--fg-2); font-size: var(--fs-sm); }
+.stat { display: inline-flex; align-items: baseline; gap: 4px; white-space: nowrap; }
+.stat b { color: var(--fg-0); font-size: var(--fs-lg); font-weight: 500; }
+.stat b.dim { color: var(--fg-2); }
+.stat b.c-ok { color: var(--ok); } .stat b.c-warn { color: var(--warn); } .stat b.c-err { color: var(--err); }
+.stat-sep { width: 1px; height: 14px; align-self: center; background: var(--line); }
+.trust-when { display: inline-flex; align-items: center; gap: 6px; font-size: var(--fs-xs); }
+.trust-sec { display: flex; flex-direction: column; gap: 8px; min-width: 0; }
+.trust-sec > h4 { display: flex; align-items: center; gap: 8px; color: var(--fg-1); font-size: var(--fs-sm); font-weight: 500; }
+.trust-sec > h4 .grow-right { margin-left: auto; }
+.trust-sec > .table-wrap, .plan-phase > .table-wrap { border-radius: var(--r-md); box-shadow: inset 0 0 0 1px var(--line-faint); }
+.trust-sec .table th { position: static; background: transparent; }
+.trust-sec .table tbody tr:last-child td { border-bottom: 0; }
+.trust-sec .table td { padding: 8px 10px; } .trust-sec .table th { padding: 7px 10px; }
+.table-wrap .trust-table { min-width: 860px; }
+.trust-table td .chips { margin-top: 2px; max-width: 260px; }
+.trust-table td .tag { margin-top: 4px; }
+.trust-table .ev { max-width: 220px; }
+/* 面板窄的时候结论表一条结论一块：编号、状态、可信度一行，结论一行，其余各项带标签逐行列出 */
+@container trust (max-width: 1100px) {
+  .trust .table-wrap .trust-table { min-width: 0; }
+  .trust-table thead { display: none; }
+  .trust-table, .trust-table tbody { display: block; }
+  .trust-table tr { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 8px; padding: 10px 12px; border-bottom: 1px solid var(--line-faint); }
+  .trust-table tbody tr:last-child { border-bottom: 0; }
+  .trust-sec .trust-table td { display: block; min-width: 0; padding: 0; border: 0; }
+  .trust-table td.c-trust { order: 1; margin-left: auto; }
+  .trust-table td.c-text { order: 2; flex: 1 0 100%; }
+  .trust-table td[data-label] { order: 3; display: flex; flex: 1 0 100%; align-items: baseline; gap: 10px; }
+  .trust-table td[data-label]::before { content: attr(data-label); flex: none; width: 52px; color: var(--fg-2); font-size: var(--fs-xs); }
+  .trust-table td[data-label] > div { min-width: 0; }
+  .trust-table td .chips { max-width: none; }
+  .trust-table .ev { max-width: 100%; }
+}
+.claim-issues { margin: 4px 0 0; padding-left: 1.2em; font-size: var(--fs-xs); line-height: 1.5; }
+.fails { display: flex; flex-direction: column; border-radius: var(--r-md); box-shadow: inset 0 0 0 1px var(--line-faint); }
+.fail { display: flex; flex-direction: column; gap: 6px; padding: 10px 12px; }
+.fail + .fail { border-top: 1px solid var(--line-faint); }
+.fail-head { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; font-size: var(--fs-xs); }
+.fail-claim { font-size: var(--fs-md); line-height: 1.55; }
+.fail-note { color: var(--err); font-size: var(--fs-sm); line-height: 1.55; }
+.fail-cmd { display: flex; align-items: center; gap: 4px; }
+.fail-cmd .run-cmd { flex: 1; min-width: 0; padding: 4px 8px; }
+.trust-sub { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; font-size: var(--fs-sm); }
+.trust-sub .c-ok { display: inline-flex; align-items: center; gap: 4px; }
+.issue-group { display: flex; flex-direction: column; }
+.issue-group > .link-btn { align-self: flex-start; padding: 4px 0; }
+.issue-group-head { display: flex; align-items: center; gap: 6px; padding: 4px 0; color: var(--fg-1); font-size: var(--fs-sm); font-weight: 500; }
+.issue { display: flex; align-items: baseline; gap: 10px; padding: 6px 2px 6px 10px; border-left: 2px solid var(--line); font-size: var(--fs-sm); line-height: 1.5; }
+.issue-level { flex: none; width: 26px; font-size: var(--fs-xs); }
+.issue-body { display: flex; flex-direction: column; gap: 3px; min-width: 0; overflow-wrap: anywhere; }
+.issue-meta { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; font-size: var(--fs-xs); }
+.plan-state { align-items: center; }
+.plan-phase { display: flex; flex-direction: column; gap: 4px; }
+.table-wrap .plan-table { min-width: 0; }
+.plan-table td .chips { margin-top: 4px; }
+.plan-table .ev { max-width: 100%; }
+.plan-raw { padding: 10px 14px; border-radius: var(--r-md); background: var(--tint); }
+
+/* 运行详情：环境、输入、输出 */
+/* 环境沿用 .facts（概览面板、设置页），只加行距和行内小部件 */
+.env-facts { gap: 10px 16px; line-height: 1.55; }
+.env-facts dd .tag { margin: 0 6px; }
+.env-facts dd .icon-btn { width: 22px; height: 22px; vertical-align: middle; }
+.pkgs { display: flex; flex-direction: column; gap: 8px; margin-top: 14px; }
+.pkgs .mini-search { align-self: flex-start; }
+.pkg-list { max-height: 360px; overflow: auto; padding: 8px 12px; border-radius: var(--r-md); background: var(--sunken); }
+.prov-head { display: flex; flex-wrap: wrap; gap: 4px 12px; padding: 10px 14px 4px; font-size: var(--fs-sm); }
+.table-wrap .prov-table { min-width: 0; }
+.prov-table .cell-path { max-width: 420px; overflow-wrap: anywhere; font-size: var(--fs-xs); }
+.prov-table .link-btn { text-align: left; font-size: var(--fs-xs); }
+.prov-table .link-btn svg { flex: none; }
+.prov-table .tag { margin-left: 6px; }
+.table th.num, .table td.num { text-align: right; }
+/* 窄的数字列：表头在 JSX 里折成两行 */
+.table th.tight { width: 1%; }
+.table th.tight, .table td.tight { padding-left: 6px; padding-right: 6px; }
+.card.flush .table th.tight:last-child, .card.flush .table td.tight:last-child { padding-right: 16px; }
 
 /* ---------- Markdown ---------- */
 .md { font-size: var(--fs-md); line-height: 1.7; overflow-wrap: anywhere; }
@@ -553,7 +648,7 @@ button.ev:hover:not(:disabled) { background: var(--accent-soft); color: var(--ac
 .md blockquote { padding: 2px 12px; border-left: 2px solid var(--line-strong); color: var(--fg-1); }
 .md table { display: block; max-width: 100%; overflow: auto; border-collapse: collapse; font-size: var(--fs-sm); }
 .md th, .md td { padding: 5px 12px; border-bottom: 1px solid var(--line); text-align: left; }
-.md th { color: var(--fg-1); font-weight: 500; }
+.md th { color: var(--fg-1); font-weight: 500; white-space: nowrap; }
 .md hr { height: 1px; margin: 1.4em 0; border: 0; background: var(--line); }
 .md img { max-width: 100%; }
 

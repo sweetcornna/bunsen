@@ -5,3 +5,4 @@ runs/*/sup.pid
 runs/*/*.tmp
 runs/.pull-*/
 __pycache__/
+runs/*/.rk-*

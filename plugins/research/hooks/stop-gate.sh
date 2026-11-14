@@ -12,12 +12,25 @@ home=$(research_home)
 active="$home/.loop/active"
 [ -f "$active" ] || exit 0
 command -v jq >/dev/null 2>&1 || exit 0
+printf '%s' "$input" | jq -e 'type == "object"' >/dev/null 2>&1 || exit 0
 get() { printf '%s' "$input" | jq -r "$1" 2>/dev/null; }
 
-[ "$(get '.stop_hook_active // false')" = "true" ] && exit 0
+# 不可确认会话或后台状态时，绝不进入 gate，也不认领循环。
+printf '%s' "$input" | jq -e '
+  (.session_id | type == "string" and length > 0) and
+  ((has("stop_hook_active") | not) or (.stop_hook_active | type == "boolean")) and
+  (if has("background_tasks") then
+    (.background_tasks | type == "array" and all(.[]; type == "object" and
+      ((has("status") | not) or (.status | type == "string")))) else true end) and
+  (if has("session_crons") then
+    (.session_crons | type == "array" and all(.[]; type == "object")) else true end)
+' >/dev/null 2>&1 || exit 0
+stopping=$(get '.stop_hook_active // false') || exit 0
+[ "$stopping" = "true" ] && exit 0
 
 # 只管启动循环的那个会话；同一项目里的其他会话不受影响。
-sid=$(get '.session_id // ""')
+sid=$(get '.session_id') || exit 0
+[ -n "$sid" ] || exit 0
 owner=$(sed -n 's/^session: *//p' "$active" | head -n1)
 if [ -z "$owner" ]; then
   if [ -n "$sid" ]; then
@@ -30,12 +43,35 @@ fi
 
 [ -s "$home/.loop/blocked" ] && exit 0
 
-live=$(get '[.background_tasks[]? | select(((.status // "running") | tostring | ascii_downcase | test("^(completed|complete|succeeded|failed|killed|stopped|cancell?ed|done|exited|error|timeout|timed_out)$")) | not)] | length')
-crons=$(get '(.session_crons // []) | length')
-case "$live" in ''|*[!0-9]*) live=0 ;; esac
-case "$crons" in ''|*[!0-9]*) crons=0 ;; esac
+live=$(get '[.background_tasks[]? | select(((.status // "running") | tostring | ascii_downcase | test("^(completed|complete|succeeded|failed|killed|stopped|cancell?ed|done|exited|error|timeout|timed_out)$")) | not)] | length') || exit 0
+crons=$(get '(.session_crons // []) | length') || exit 0
+case "$live" in ''|*[!0-9]*) exit 0 ;; esac
+case "$crons" in ''|*[!0-9]*) exit 0 ;; esac
 [ "$live" -gt 0 ] && exit 0
 [ "$crons" -gt 0 ] && exit 0
+
+# 外层再限时：旧 rk、坏 JSON、异常、超时都按 pass 处理，不硬拦。
+review=$(python3 - "$home" <<'PYGATE' 2>/dev/null
+import json, os, pathlib, subprocess, sys
+try:
+    home = pathlib.Path(sys.argv[1])
+    p = subprocess.run([sys.executable, str(home / 'tools/rk.py'), 'review', 'gate', '--json'],
+                       env=dict(os.environ, RESEARCH_HOME=str(home)), capture_output=True, text=True, timeout=5)
+    if p.returncode or len(p.stdout) > 1024 * 1024: raise ValueError('gate failed')
+    data = json.loads(p.stdout)
+    if not isinstance(data, dict) or data.get('action') not in ('pass', 'block', 'escalate') or not isinstance(data.get('message'), str):
+        raise ValueError('invalid gate')
+    if data['action'] == 'block': print(json.dumps(dict(decision='block', reason=data['message']), ensure_ascii=False))
+    elif data['action'] == 'escalate':
+        print(json.dumps(dict(hookSpecificOutput=dict(hookEventName='Stop', additionalContext=data['message'])), ensure_ascii=False))
+except Exception:
+    pass
+PYGATE
+) || review=''
+if [ -n "$review" ]; then
+  printf '%s\n' "$review"
+  exit 0
+fi
 
 reason='研究循环还开着，但你要停下，而且没有任何后台任务会来唤醒你。按顺序判断，只做第一条成立的：
 1. 队列里有不依赖别人就能做的下一项（本机持有的 state/<线>.md 的“下一步”；旧项目看 STATE.md）→ 现在就做，不要先汇报再等。

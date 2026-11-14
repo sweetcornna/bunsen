@@ -11,6 +11,12 @@ use std::path::{Path, PathBuf};
 #[folder = "../../plugins"]
 struct Bundled;
 
+/// 质量视图必须使用随 Bunsen 下发的模板，而不是用户覆盖的插件目录。
+pub(crate) fn research_template(name: &str) -> Option<String> {
+    let file = Bundled::get(&format!("research/templates/research/{name}"))?;
+    String::from_utf8(file.data.into_owned()).ok()
+}
+
 /// 不下发的目录名。
 const EXCLUDED_DIRS: &[&str] = &[".git", ".claude", "tests", "node_modules", "keys", "secrets", "__pycache__"];
 /// 本机目录插件的上限（防止误选一个巨大的目录）。

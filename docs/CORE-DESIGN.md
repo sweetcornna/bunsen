@@ -22,11 +22,17 @@ crates/core  (bunsen-core)
   src/keys.rs              私钥存取、指纹（ssh-keygen -lf）
   src/probe.rs             探测脚本与解析、GPU
   src/sessions.rs          部署、状态刷新/发现、send/keys/capture/restart/stop/delete
-  src/workspace.rs         文件、git、科研面板、产物、原始字节、运行详情（v1.1）
+  src/workspace.rs         文件、git、科研面板、产物、原始字节、运行详情（v1.1）；按路径读文件的校验（v1.4）
+  src/scripts/artifacts.py 产物查找与来源匹配（远端 python3 执行；v1.4 从 workspace.rs 挪出并加上来源）
+  src/research_quality.rs  可信度（v1.4）：远程脚本、分段解析、rk 对象透传与脱敏
+  src/scripts/research_trust.py  远端依次执行四条 rk 命令（限时、限量、独立进程组）
+  src/research_quality_tests.rs、src/artifact_quality_tests.rs  可信度、运行详情、产物来源的测试（固定夹具）
   src/plugins.rs           内嵌插件（rust-embed，源在 plugins/）与本机目录插件：过滤、可执行位、展开到 plugins-cache（v1.2）
   build.rs                 plugins/ 与 agents.json 变了就重编
   src/projects.rs          研究项目（v1.3）：汇合点只读镜像、跨机器视图、部署时的接入脚本、立即同步
+  src/project_quality.rs   项目视图的可信度计数（v1.4，projects.rs 的子模块）
   src/projects_tests.rs    projects.rs 的测试（真实 git 仓库）
+  tests/fixtures/quality/  rk 0.6 输出的固定夹具和一个假 rk.py（v1.4）
   src/term.rs              本机伪终端里跑 ssh -tt，本机服务器直接跑 bash -lc（终端通道与 attach 用）
   src/core.rs              Core：对外的全部能力（服务、命令行、MCP 共用）
 crates/cli   (bunsen-cli，可执行文件 bunsen)
@@ -36,6 +42,7 @@ crates/cli   (bunsen-cli，可执行文件 bunsen)
   build.rs                 ui/dist 变了就重编
   tests/itest.rs           走真实 HTTP 的集成测试（#[ignore]，dev/itest.sh 一条命令跑；测试服务器端口 BUNSEN_TEST_PORT，缺省 2222）
   tests/r3.rs              真实入口测试：命令行参数错误脱敏、HTTP/WebSocket 的服务器参数解析
+  tests/quality.rs         真实入口测试：命令行 research --trust、MCP research_trust（v1.4）
 ```
 
 ## 关键决定
@@ -71,6 +78,17 @@ crates/cli   (bunsen-cli，可执行文件 bunsen)
 24. **git 子进程**：`GIT_TERMINAL_PROMPT=0`，`GIT_ALLOW_PROTOCOL=file:git:http:https:ssh`，标准输入为空（`cat-file --batch` 除外）。研究插件 `rk.py` 用同样的协议白名单。
 25. **研究插件里的合并交给 git 保护**（研究插件 0.5.0 的 `rk sync`）：在真实索引上合并，不用临时索引。真正合并前要求暂存区和 HEAD 一致，快进由 git 自己保留暂存内容。HEAD 移动后按仓库状态判断结果，不回滚。git 及其 hook 放在独立进程组，由监护进程经控制管道托管：rk 自己超时、超限、被信号或被 KILL 时都能清掉整组，并回滚登记过的半截合并。
 
+### v1.4：研究质量
+
+26. **可信度只透传，一次远程脚本取完**：`research_quality.rs` 拼一段脚本，沿用科研面板解析研究目录的那段（`RESOLVE_HOME`）。先用 shell 读 `rk.py` 前 1 MiB 里的 `RK_VERSION`：没有研究目录、没有 `rk.py`、版本旧于 0.6.0 或认不出时直接给出原因，不起 Python。版本够新时才把内嵌的 `scripts/research_trust.py` 用 `python3 -c` 送过去，由它依次跑四条 rk 命令：每条在独立进程组里，单条 60 秒、合计 145 秒（外层执行器 150 秒，留出清理时间），标准输出超过 4 MiB 即停；超时或外层取消时先 TERM，2 秒后 KILL 整组。每条的结果包成一行 ASCII JSON（`{value}` 或 `{error}`）放进分段标记。Rust 只看它是不是对象、`ok`/`error` 和必有键，然后对所有字符串（含对象的键，rk 可能把 URL 当键）脱敏。rk 对象在模型里是 `serde_json::Value`：不重新实现插件的 schema，未知字段原样保留。
+27. **运行详情的 `env.json`、`outputs.json` 在远端先判大小**：`stat` 超过 256 KiB / 1 MiB 的不传，传回后按分段标记取出，不是 JSON 对象的记 null。`PLAN.md` 和 `repo_prefix`（`git rev-parse --show-prefix`）并进原有的科研面板脚本，不多连一次。
+28. **产物来源在远端算，只算返回的那些**：产物脚本挪进 `scripts/artifacts.py`。有 python3 时照旧列出文件，再在 Python 里排序、截断到 `limit`，只为要返回的产物找来源、算哈希。路径身份用 `realpath`：产物和清单条目的真实路径都必须在工作目录内，否则不参与匹配，越界的不可能得到 `verified=true`；在工作目录内的再换算成仓库根相对路径（不在仓库里用绝对路径）作为键。清单最多读 2000 份、每份 4 MiB，格式不对的清单或条目跳过；同一路径取 `(written_at, 运行 ID)` 最大的那次运行。哈希与 rk 的 H 相同（大文件取首尾），一次请求合计 512 MiB；读取前后大小或修改时间变了记 false。结果作为 `__OP_RUN__` 之后的一段 JSON 带回，Rust 按路径并进列表。没有 python3 的 find/stat 退路不找来源，`run` 一律为 null。
+29. **按路径读文件不再 trim**：`file`、`raw`（经 `read_remote`）和 `files`、`git/diff` 共用 `validate_read_path`：空路径或含控制字符的拒绝，其余原样当作路径。原先先 trim 再展开 `~`，前端看到的“相对路径”在服务端会变成工作目录外的文件。
+30. **项目视图读 git 树和 blob id，不算 sha256**：review 记录同时存 sha256 和 `git_blob`，rk 用前者，Bunsen 用后者；镜像的 `ls-tree` 本来就给出 blob id，比较的是同一份内容，Bunsen 不需要 sha256 依赖。`project_quality.rs` 是 Bunsen 里唯一复现 rk 规则的地方：结论文件列表、空白判定、复核覆盖、fail 关闭、引用计数，只看研究分支。
+31. **正文按需读**：`cat-file --batch` 改成交互式（`git_exchange`，仍是同一套 120 秒超时和进程组清理），分三轮请求对象：先读每个研究分支的 `rk.py` 取版本；再读原有视图要的正文，以及版本够新的研究分支上的 `audits/review-*.json`、`audits/resolve-*.json`、`sources/*.json`；最后只请求没核过的结论文件正文（核过的不用判断是否空白）。`sync/*` 分支不读质量文件。所有正文共用 G14 的单对象 1 MiB、合计 64 MiB 上限，在请求之前判断，超限的计入“没有读入”的警告。
+32. **镜像端的几处取舍**：空白判定用随 Bunsen 内嵌的插件模板（`plugins::research_template`），不用用户本机覆盖的插件目录，并和插件共用 `docs/blank-cases.json` 逐例夹具测试；记录 id 取文件名，不信正文里的另一份 id；研究线归属只读研究分支上的 `meta.json`，不用视图里可能来自还没并入的 `sync/*` 分支的运行；未关闭的 fail 直接从 review 条目数，结果页删掉之后照样计入。
+33. **先用固定夹具测**：`crates/core/tests/fixtures/quality/` 是按契约 JSON 形状写的 rk 0.6 输出和一个假 `rk.py`，插件完成之前后端就能测；`crates/cli/tests/quality.rs` 起真正的 `bunsen` 进程测命令行和 MCP。联调阶段换成真实 rk。
+
 ## 任务拆解（实现顺序）
 
 1. 工作区骨架、错误/模型/工具函数、存储；
@@ -84,3 +102,4 @@ crates/cli   (bunsen-cli，可执行文件 bunsen)
 9. v1.1：raw、artifacts、研究记录增强、运行详情、GPU 进程、主机笔记、MCP 新工具；
 10. v1.2：插件内嵌与下发、Settings.plugin_paths、Agent.plugin_prompt、plugins 字段与兼容规则、CLI/MCP。
 11. v1.3：执行器与本机服务器、跨进程锁、研究项目（镜像、视图、部署接入、立即同步）、报错摘要与脱敏、CLI/MCP、两机端到端验证。
+12. v1.4：可信度接口与远程脚本、运行详情的环境与输出清单、产物来源、按路径读文件的校验、项目视图的可信度计数、CLI/MCP；先用固定夹具测，联调换真实 rk。

@@ -163,10 +163,123 @@ export type RunDetail = {
   log_tail: string;
   metrics: Record<string, unknown> | null;
   result_md: string | null;
+  /** v1.4：runs/<id>/env.json、outputs.json；超出上限或不合法为 null，旧版服务端没有这两个字段。 */
+  env?: RkEnv | null;
+  outputs?: RkOutputs | null;
 };
 
 export type ArtifactKind = "image" | "pdf" | "table" | "notebook" | "html" | "doc";
-export type Artifact = { path: string; name: string; kind: ArtifactKind; size: number; mtime: string };
+export type Artifact = {
+  path: string;
+  name: string;
+  kind: ArtifactKind;
+  size: number;
+  mtime: string;
+  /** v1.4：outputs.json 里记着写它的运行（精确对应）；查不到、服务器没有 python3 时为 null，旧版服务端没有这个字段。 */
+  run?: { run_id: string; verified: boolean | null } | null;
+};
+
+// ---------- 研究质量（第四期契约第 8 节；rk 各命令的 --json 输出原样透传）----------
+
+export type ReviewItemType = "action" | "number" | "citation" | "figure" | "deliverable" | "excerpt" | "other";
+export type RkAuditVerdict = "可采信" | "需退回" | "不可采信";
+export type RkIssue = { code: string; message: string; file: string | null; ref: string | null };
+export type RkClaim = {
+  id: string;
+  status: string;
+  text: string;
+  kind: string;
+  date: string;
+  decisive: boolean;
+  evidence: string[];
+  runs: { run_id: string; state: string; audit: RkAuditVerdict | null; audit_id: string | null }[];
+  results: { path: string; review: "reviewed" | "unreviewed" | "blank" | "missing"; open_fails: number }[];
+  citations: { id: string; status: "ok" | "not_found" | "retracted" | "unchecked" }[];
+  review: "reviewed" | "unreviewed";
+  trust: "ok" | "warn" | "fail";
+};
+export type RkCheck = {
+  ok: boolean;
+  rk_version: string;
+  counts: { runs: number; overview_rows: number; claims: number; errors: number; warnings: number; notes: number };
+  errors: RkIssue[];
+  warnings: RkIssue[];
+  notes: RkIssue[];
+  claims: RkClaim[];
+};
+export type RkOpenFail = {
+  ref: string;
+  review_id: string;
+  file: string;
+  line: number | null;
+  row: string | null;
+  type: ReviewItemType;
+  claim: string;
+  evidence: string[];
+  note: string;
+  recorded_at: string;
+};
+export type RkReviewStatus = {
+  rk_version: string;
+  files: { path: string; sha256: string; state: "reviewed" | "unreviewed" | "blank"; open_fails: number; last_review: string | null; last_reviewed_sha256: string | null }[];
+  open_fails: RkOpenFail[];
+  problems: number;
+};
+export type RkCiteStatus = "ok" | "not_found" | "retracted" | "unchecked" | "error";
+export type RkCiteReport = {
+  ok: boolean;
+  rk_version: string;
+  checked: number;
+  skipped: number;
+  items: { id: string; status: RkCiteStatus; files: string[]; cache: string | null; title: string | null; error: string | null }[];
+};
+export type RkPlanStatus = {
+  present: boolean;
+  approved: boolean;
+  approved_at: string | null;
+  changed_since_approval: boolean;
+  deviations_since_approval: number;
+  phases: {
+    title: string;
+    // resolved（Q9）：找到时的路径，相对仓库根（不在仓库里时为绝对路径），没找到为 null
+    steps: { id: string; step: string; status: string; prereg: string | null; deliverables: { path: string; exists: boolean; resolved?: string | null }[] }[];
+  }[];
+};
+export type RkEnv = {
+  version: 1;
+  captured_at: string;
+  python: { executable: string | null; version: string | null };
+  packages: { tool: "pip" | "uv" | "conda" | null; lines: string[]; truncated: boolean };
+  gpu: { driver: string | null; cuda: string | null; names: string[] } | null;
+  os: { system: string; release: string; machine: string; platform: string };
+  host: string;
+  fingerprint: string;
+};
+export type RkOutputs = {
+  version: 1;
+  run_id: string;
+  written_at: string;
+  files: { path: string; sha256: string | null; size: number; partial: boolean; unhashed: boolean }[];
+  truncated: boolean;
+};
+/** 运行的 meta.inputs（rk run --in），旧运行没有。 */
+export type RkInput = { path: string; type: "file" | "dir"; sha256: string | null; size: number; files: number | null; partial: boolean; unhashed: boolean };
+
+export type TrustCommand = "check" | "review" | "cite" | "plan";
+export type ResearchTrust = {
+  available: boolean;
+  reason: string | null;
+  rk_version: string | null;
+  checked_at: string;
+  check: RkCheck | null;
+  review: RkReviewStatus | null;
+  cite: RkCiteReport | null;
+  plan: RkPlanStatus | null;
+  failures: { command: TrustCommand; message: string }[];
+};
+
+/** 项目视图里研究分支上的核对与引用情况（契约 8.5）。 */
+export type ProjectTrust = { open_fails: number; unreviewed: number; unresolved_citations: number; retracted_citations: number };
 export type HostNotes = { text: string; exists: boolean };
 
 export type Research = {
@@ -182,6 +295,10 @@ export type Research = {
   log_tail?: string | null;
   prereg?: { name: string; title: string }[];
   results?: { name: string; title: string }[];
+  /** v1.4：PLAN.md 原文。 */
+  plan_md?: string | null;
+  /** v1.4（Q8）：工作目录相对仓库根的前缀；工作目录就是仓库根时为 ""，不在 git 仓库里为 null。 */
+  repo_prefix?: string | null;
   runs: ResearchRun[];
 };
 
@@ -244,6 +361,9 @@ export type ProjectLine = {
   updated: string | null;
   next: string[];
   source: string;
+  /** v1.4：研究分支上这条线的结果页里未关闭的 fail、没核过的结果页；视图的 trust 为 null 时都为 null（没算，Q10）。 */
+  open_fails?: number | null;
+  unreviewed?: number | null;
 };
 
 export type ProjectRun = {
@@ -270,6 +390,8 @@ export type ProjectView = {
   members: ProjectMember[];
   decisions: string | null;
   warnings: string[];
+  /** v1.4：研究分支上的 rk.py 旧于 0.6.0 时为 null；旧版服务端没有这个字段。 */
+  trust?: ProjectTrust | null;
 };
 
 export type MemberSync = {
@@ -358,7 +480,7 @@ async function errorFrom(res: Response): Promise<ApiError> {
 // status 为 0：是前端自己拦下的，不是服务端说没有（调用方据此不去改列表，例如不把同名的项目当成已删除）。
 const DOT_SEGMENT = /\/(?:\.|%2e){1,2}(?=[/?#]|$)/i;
 
-async function send(method: string, path: string, body?: unknown, accept?: string): Promise<Response> {
+async function send(method: string, path: string, body?: unknown, accept?: string, signal?: AbortSignal): Promise<Response> {
   if (DOT_SEGMENT.test(path.split("?")[0])) throw new ApiError("not_found", "地址不对：找不到这一项", "检查地址栏里的 id 或名称。", 0);
   const headers: Record<string, string> = { "x-bunsen-token": token() };
   if (accept) headers["accept"] = accept;
@@ -369,14 +491,15 @@ async function send(method: string, path: string, body?: unknown, accept?: strin
     payload = JSON.stringify(body);
   }
   try {
-    return await fetch(path, { method, headers, body: payload });
-  } catch {
+    return await fetch(path, { method, headers, body: payload, signal });
+  } catch (e) {
+    if (signal?.aborted) throw e; // 调用方自己取消的，不当成连不上
     throw new ApiError("offline", "连不上 Bunsen 服务", "确认 bunsen serve 还在运行，然后刷新页面。", 0);
   }
 }
 
-async function req<T>(method: string, path: string, body?: unknown): Promise<T> {
-  const res = await send(method, path, body);
+async function req<T>(method: string, path: string, body?: unknown, signal?: AbortSignal): Promise<T> {
+  const res = await send(method, path, body, undefined, signal);
   if (!res.ok) throw await errorFrom(res);
   if (res.status === 204) return undefined as T;
   const text = await res.text();
@@ -439,6 +562,7 @@ export const api = {
   gitDiff: (id: string, path?: string) => req<{ diff: string }>("GET", `/api/sessions/${encodeURIComponent(id)}/git/diff${q({ path })}`),
   research: (id: string) => req<Research>("GET", `/api/sessions/${encodeURIComponent(id)}/research`),
   run: (id: string, runId: string, lines = 200) => req<RunDetail>("GET", `/api/sessions/${encodeURIComponent(id)}/research/run${q({ run_id: runId, lines })}`),
+  trust: (id: string, signal?: AbortSignal) => req<ResearchTrust>("GET", `/api/sessions/${encodeURIComponent(id)}/research/trust`, undefined, signal),
   artifacts: (id: string, limit = 300) => req<{ items: Artifact[]; truncated: boolean }>("GET", `/api/sessions/${encodeURIComponent(id)}/artifacts${q({ limit })}`),
   raw: async (id: string, path: string): Promise<ArrayBuffer> => {
     const res = await send("GET", `/api/sessions/${encodeURIComponent(id)}/raw${q({ path })}`);

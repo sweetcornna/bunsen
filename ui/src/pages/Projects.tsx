@@ -582,6 +582,18 @@ function lineSourceWhy(l: ProjectLine): string {
   return `显示的是 ${l.source} 上的那份，它的编号最大（${rule}）`;
 }
 
+// 研究线的两个数：研究分支上的 rk.py 旧于 0.6.0 时为 null（没算，契约 Q10），旧版服务端没有这两个字段；都显示“—”，不当成没有问题。
+// 项目整体的数字体现在警告里，视图顶部不另设摘要（Q11）。
+function Count({ n, tone }: { n: number | null | undefined; tone: Tone }) {
+  if (typeof n !== "number")
+    return (
+      <span className="dim" title="研究分支上的研究工具旧于 0.6.0，没有核对记录可数">
+        —
+      </span>
+    );
+  return <span className={n > 0 ? `c-${tone}` : "dim"}>{n}</span>;
+}
+
 function LinesCard({ view }: { view: ProjectView }) {
   const branch = view.project.branch;
   return (
@@ -602,6 +614,16 @@ function LinesCard({ view }: { view: ProjectView }) {
                 <th>阶段</th>
                 <th>在等什么</th>
                 <th>下一步</th>
+                <th className="num tight">
+                  未关闭
+                  <br />
+                  问题
+                </th>
+                <th className="num tight">
+                  未核
+                  <br />
+                  文件
+                </th>
               </tr>
             </thead>
             <tbody>
@@ -634,6 +656,12 @@ function LinesCard({ view }: { view: ProjectView }) {
                       <span className="dim">—</span>
                     )}
                     {l.updated && <div className="dim">更新于 {l.updated}</div>}
+                  </td>
+                  <td className="num tight">
+                    <Count n={l.open_fails} tone="err" />
+                  </td>
+                  <td className="num tight">
+                    <Count n={l.unreviewed} tone="warn" />
                   </td>
                 </tr>
               ))}

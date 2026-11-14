@@ -1,7 +1,7 @@
 import { useEffect } from "react";
 import { create } from "zustand";
 import { api, asApiError, type Agent, type ApiError, type KeyInfo, type Meta, type MemberSync, type Plugin, type Project, type ProjectMember, type ProjectView, type Server, type Session, type Settings } from "./api";
-import { isLocal } from "./format";
+import { hasKey, isLocal } from "./format";
 import { currentRoute, projectHref } from "./route";
 
 export type Toast = { id: number; tone: "info" | "ok" | "err"; text: string; hint?: string | null; link?: { label: string; href: string } };
@@ -167,7 +167,7 @@ export const useApp = create<AppState>((set, get) => ({
   },
   noteMissingProjects: (ids) => {
     const st = get();
-    const fresh = ids.filter((id) => !(id in st.projectsMissing) && !projectOf(st.projects, id));
+    const fresh = ids.filter((id) => !hasKey(st.projectsMissing, id) && !projectOf(st.projects, id));
     if (fresh.length === 0) return;
     set({ projectsMissing: { ...st.projectsMissing, ...Object.fromEntries(fresh.map((id) => [id, projectsReq])) } });
     void get().loadProjects();
@@ -283,7 +283,7 @@ export const useApp = create<AppState>((set, get) => ({
 useApp.subscribe((st, prev) => {
   if (!st.projectsReady || (st.sessions === prev.sessions && st.projects === prev.projects && st.projectsReady === prev.projectsReady)) return;
   const ids = new Set<string>();
-  for (const s of st.sessions) if (s.project_id && !projectOf(st.projects, s.project_id) && !(s.project_id in st.projectsMissing)) ids.add(s.project_id);
+  for (const s of st.sessions) if (s.project_id && !projectOf(st.projects, s.project_id) && !hasKey(st.projectsMissing, s.project_id)) ids.add(s.project_id);
   if (ids.size > 0) st.noteMissingProjects([...ids]);
 });
 

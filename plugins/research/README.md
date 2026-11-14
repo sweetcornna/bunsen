@@ -16,13 +16,13 @@ claude plugin install research@research-plugin --scope user
 
 桌面应用里也可以从 **+ → Add plugins** 添加本地市场。只想临时试用：`claude --plugin-dir /Users/cornna/project/research_plugin`。
 
-钩子需要 `bash` 和 `jq`；工具脚本需要 Python 3.8 以上（只用标准库）。缺 `jq` 时钩子自动放行，不会卡住会话。
+钩子需要 `bash` 和 `jq`；工具脚本需要 Python 3.9 以上（只用标准库）。缺 `jq` 时钩子自动放行，不会卡住会话。
 
 ## 使用
 
 | 命令 | 作用 |
 |---|---|
-| `/research:start <研究目标>` | 建研究目录、定项目设定（只在这一步集中提问一次）、接入算力、初始调研与发散，然后持续推进 |
+| `/research:start <研究目标>` | 建研究目录、定项目设定、起草并批准一次计划、接入算力、初始调研与发散，然后持续推进 |
 | `/research:resume [线] [补充指示]` | 会话重启、换会话或换机器后，从状态文件接着做 |
 | `/research:handoff <线> <机器代号>` | 把一条研究线交给另一台机器（本机 ↔ 服务器）：前置检查、交接摘要、推送、转移推进权 |
 | `/research:status` | 几行话报告现状和需要你决定的事（只读） |
@@ -30,7 +30,7 @@ claude plugin install research@research-plugin --scope user
 | `/research:ideation` | 单独做一轮发散与收敛 |
 | `/research:lab-access` | 单独接入实验室算力 |
 
-启动之后它不再提问：需要你决定的事写在 `research/SUMMARY.md` 的“需要你决定的事”里，并按最稳妥的默认继续；只有不可逆、越权或会影响别人的操作才停下来问。
+启动时集中确认设定与 PLAN.md，批准一次后继续推进，不因每次偏离反复要求批准：需要你决定的事写在 `research/SUMMARY.md` 的“需要你决定的事”里，并按最稳妥的默认继续；只有不可逆、越权或会影响别人的操作才停下来问。
 
 ## 角色
 
@@ -39,13 +39,13 @@ claude plugin install research@research-plugin --scope user
 | 统筹者 | 主会话（用最强的模型） | 方向与优先级、算力分配、每批审核、受阻时诊断、向你汇报 |
 | `research:executor` | opus | 一批迭代：设计、预登记、实现、冒烟、运行、核验、记录、合并 |
 | `research:scout` | haiku | 并行调研、按角度出想法、查新颖性；只读 |
-| `research:auditor` | sonnet | 只看原始记录的独立核查；只读 |
+| `research:auditor` | sonnet | 只看原始记录的独立核查（推断审计、结论文件的事实核对）；只读 |
 
 模型在 `agents/*.md` 的 `model:` 一行改。
 
 ## 它怎么保证“自己不断做下去，又不瞎忙”
 
-- **循环开关加 Stop 钩子**。循环开着时，结束一轮只有三种正当理由：有后台任务在跑（它结束时会唤醒会话）、在等你的决定、循环已关。都不是，钩子提醒一次（以提示的形式，不显示成钩子错误）：要么做队列里的下一项，要么把等待架好。
+- **循环开关加 Stop 钩子**。循环开着时，结束一轮只有三种正当理由：有后台任务在跑（它结束时会唤醒会话）、在等你的决定、循环已关。都不是，先看事实复核：未核文件或未关闭 fail 会硬拦，同一问题集合三次仍未解决则登记“在等用户”并升级；异常放行。没有复核欠账才沿用提醒：要么做队列里的下一项，要么把等待架好。
 - **答复后自动解除等待**。统筹者用 `rk block` 登记“在等你决定”时 Stop 钩子放行；你一回复，UserPromptSubmit 钩子就解除这个登记并提醒统筹者，答复没解决的它会重新登记。任务通知之类机器发来的消息、`/research:status` 不算答复。
 - **等待靠唤醒，不靠轮询**。`rk wait` 放后台，运行结束或到状态间隔时退出并唤醒代理。到点的那一拍只做三件事：一句状态、心跳、重新等待。
 - **等待纪律**。等的时候只有三种正当用法，按顺序：填满空闲算力、备好下一批、清记录欠账。都不成立就结束这一轮。轮询日志、重读文件、无关的重构与润色、没有问题的调研，都明确不做。
@@ -63,12 +63,37 @@ claude plugin install research@research-plugin --scope user
 - **独立审计**。审计员拿不到执行者的叙述，只拿运行 ID、预登记和结果页路径，按十项清单查原始记录。统筹者用 `rk audit record` 登记总评，报告原样存进 `audits/`，登记后改动报告会被查出来；“已证实”“已否定”依赖的运行当前有效的审计总评不是“可采信”，`rk check` 报错。
 - **发散有章法**。九个互不相见的角度各自出想法，去重成簇、查新颖性、成对比较，优先做能区分假设的最便宜的检验，并保留探索配额。
 
+## 0.6.0：研究质量
+
+```bash
+python3 research/tools/rk.py review status --json
+python3 research/tools/rk.py cite check           # 唯一联网的核验；--offline 只读缓存
+python3 research/tools/rk.py review diff results/<运行ID>.md
+# 统筹者保存只读审计员的核对报告后：
+python3 research/tools/rk.py review record --report <报告.md>
+python3 research/tools/rk.py plan approve         # 用户批准后登记一次
+python3 research/tools/rk.py plan status --json
+python3 research/tools/rk.py check --json         # 始终离线
+```
+
+确认性运行声明 `--in <输入> --out <产物目录>`（可重复）；作图脚本也放进 rk run，作图规范见 `skills/protocol/references/figures.md`（数据忠实、坐标轴与区间写全、同一变量配色一致、出图后自检）。`runs/<ID>/outputs.json` 对应产物哈希，`env.json` 记录解释器、包、GPU、系统与环境指纹。超过限额会显式标记 partial、unhashed 或 truncated，不冒充完整追踪。结果页引用的图表在任何运行的输出清单里都找不到来源时，`rk check` 给警告；这一页被决定性结论引用时报错。
+
+给用户的结论先写进 SUMMARY 或结果页；推断审计之外，还要核对动作、数字、引用、图表和计划交付物。fail 修复后重核，通过条目的 resolves 指向旧项；误报或用户接受时才 `rk review resolve <ref> --note <理由>`。把文件清空或删掉不会关闭 fail。
+
+`rk cite check` 查 Crossref 和 arXiv，结果按机器缓存在 `sources/`；`rk check` 只读缓存：解析不到的引用报错，已撤稿的文献作为决定性结论的证据报错，还没核验的给警告。决定性结论用外部文献作证据时，每个标识符在 `sources/excerpts.md` 留一行原文摘录。
+
+`PLAN.md` 在 `/research:start` 时起草，用户批准后 `rk plan approve` 登记一次。之后更新步骤状态、追加偏离都不用再批准；标为“完成”的步骤缺交付物报错，批准后改了计划却没记偏离、阶段变了给警告，偏离本身不阻塞。
+
+升级到 0.6.0 后，已有决定性结论需核对一遍。账本证据或图表引用指向仓库外的链接（如 `data/ -> /mnt/...`）时，决定性结论报 `review.reference_outside`：改用 `run:` 引用，或把文件复制进研究目录。旧审计与旧运行仍可读，不强制补录输入和环境。`rk check --json` 的结构、各项规则和全部问题编码见 [研究记录与质量规则](docs/records.md)。
+
 ## 研究目录
 
 `/research:start` 在项目里建立 `research/`：
 
 | 文件 | 用途 |
 |---|---|
+| `PLAN.md` | 批准一次的研究计划、步骤交付物与偏离记录 |
+| `sources/` | 每机引用缓存与只追加的 excerpts.md |
 | `PROJECT.md` | 项目设定：目标、研究类型、红线、算力、预算与停机条件 |
 | `state/<线>.md` | 每条研究线的状态：阶段、在等什么、下一步；只由持有推进权的机器写 |
 | `STATE.md` | 各线的总览（`rk line status --write` 生成）；还没有研究线的旧项目里是统筹者手写的状态 |
@@ -80,8 +105,8 @@ claude plugin install research@research-plugin --scope user
 | `LOG.md`、`LESSONS.md`、`RUNS.md` | 日志、教训表、运行表（自动生成） |
 | `.gitattributes` | 只追加的文件用 union 合并，几台机器各自追加的行合并时都保留 |
 | `prereg/`、`results/`、`strategy/` | 预登记、结果页、策略评估 |
-| `audits/` | `rk audit record` 写的审计记录（JSON）和审计员报告原文 |
-| `runs/<运行ID>/` | 运行记录：meta.json、metrics.json、exit_code、log.txt；远程主机上的用 `rk pull` 拉回 |
+| `audits/` | `rk audit record` 写的审计记录（JSON）和审计员报告原文；`rk review record`、`rk review resolve`、`rk plan approve` 写的复核、关闭和计划批准记录（`review-*`、`resolve-*`、`plan-*`） |
+| `runs/<运行ID>/` | 运行记录：meta.json、metrics.json、exit_code、log.txt，新运行还有 outputs.json、env.json；远程主机上的用 `rk pull` 拉回 |
 | `tools/rk.py`、`tools/collab.py` | 工具，随项目入库，本机和远程主机用同一份 |
 
 ## 本机和服务器之间交接
@@ -128,6 +153,7 @@ agents/             executor scout auditor
 hooks/              session-start subagent-start user-reply stop-gate guard-secrets
 scripts/            scaffold.sh（建研究目录）、setup-lab.sh（装密钥与档案）
 templates/research/ 研究目录模板与工具
+docs/               records.md（研究记录与质量规则）、blank-cases.json（空白判定的逐例夹具，与 Bunsen 共用）
 tests/run.sh        脚手架、rk、collab、钩子的端到端测试
 CHANGELOG.md        变更记录
 ```

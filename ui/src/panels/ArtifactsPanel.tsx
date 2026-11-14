@@ -16,7 +16,7 @@ const KINDS: { id: ArtifactKind; label: string; icon: typeof ImageIcon }[] = [
 ];
 const ICON = Object.fromEntries(KINDS.map((k) => [k.id, k.icon])) as Record<ArtifactKind, typeof ImageIcon>;
 
-/** 哪次运行产生了它：按修改时间落在运行的起止之间来推断，所以标“推断”。 */
+/** 哪次运行产生了它：按修改时间落在运行的起止之间来推断，所以标“推断”。只在服务端没给出精确对应（a.run）时用。 */
 function producedBy(a: Artifact, runs: ResearchRun[]): ResearchRun | null {
   const t = Date.parse(a.mtime);
   if (Number.isNaN(t)) return null;
@@ -28,6 +28,44 @@ function producedBy(a: Artifact, runs: ResearchRun[]): ResearchRun | null {
     if (t >= s && t <= e + 60_000 && (!best || s > Date.parse(best.started_at))) best = r;
   }
   return best;
+}
+
+/**
+ * 产物出自哪次运行。exact：outputs.json 里记着（契约 8.3），changed 为真表示运行之后文件又被改过；
+ * 否则按修改时间推断。都没有为 null。
+ */
+type Origin = { run_id: string; exact: true; changed: boolean; verified: boolean | null } | { run_id: string; exact: false };
+function originOf(a: Artifact, runs: ResearchRun[]): Origin | null {
+  if (a.run) return { run_id: a.run.run_id, exact: true, changed: a.run.verified === false, verified: a.run.verified };
+  const r = producedBy(a, runs);
+  return r ? { run_id: r.run_id, exact: false } : null;
+}
+
+function originTitle(o: Origin): string {
+  if (!o.exact) return `推断：按修改时间落在 ${o.run_id} 的起止之间`;
+  if (o.changed) return `${o.run_id} 的输出清单里有这个文件，但现在的内容和运行时记下的不一样：运行之后改过`;
+  if (o.verified === true) return `${o.run_id} 的输出清单里有这个文件，内容和运行时记下的一致`;
+  return `${o.run_id} 的输出清单里有这个文件（大小一致，内容没有比对）`;
+}
+
+/** 产物预览顶栏和缩略图下面的来源标记。 */
+function OriginBadge({ o, onRun }: { o: Origin; onRun?: (runId: string) => void }) {
+  const label = o.exact ? `出自 ${o.run_id}` : `推断 ${o.run_id}`;
+  return (
+    <>
+      {onRun ? (
+        <button type="button" className={cx("prov", o.exact && "exact")} onClick={() => onRun(o.run_id)} title={originTitle(o)}>
+          <FileCode2 size={11} />
+          {label}
+        </button>
+      ) : null}
+      {o.exact && o.changed && (
+        <span className="tag warn" title={originTitle(o)}>
+          运行之后改过
+        </span>
+      )}
+    </>
+  );
 }
 
 export function ArtifactsPanel({ session, active, runs, onQuote, onRun }: { session: Session; active: boolean; runs: ResearchRun[]; onQuote: (q: Quoted) => void; onRun: (runId: string) => void }) {
@@ -80,7 +118,7 @@ export function ArtifactsPanel({ session, active, runs, onQuote, onRun }: { sess
   }, [items, kind, query, stars]);
 
   if (open) {
-    const run = producedBy(open, runs);
+    const origin = originOf(open, runs);
     return (
       <FilePreview
         sessionId={session.id}
@@ -95,12 +133,7 @@ export function ArtifactsPanel({ session, active, runs, onQuote, onRun }: { sess
             <IconButton label={stars.includes(open.path) ? "取消星标" : "星标"} active={stars.includes(open.path)} onClick={() => toggleStar(open.path)}>
               <Star size={13} fill={stars.includes(open.path) ? "currentColor" : "none"} />
             </IconButton>
-            {run && (
-              <button type="button" className="prov" onClick={() => onRun(run.run_id)} title="按修改时间推断">
-                <FileCode2 size={11} />
-                {run.run_id}
-              </button>
-            )}
+            {origin && <OriginBadge o={origin} onRun={onRun} />}
           </>
         }
       />
@@ -139,7 +172,7 @@ export function ArtifactsPanel({ session, active, runs, onQuote, onRun }: { sess
         {items && shown.length === 0 && <Empty icon={<ImageIcon size={20} />} title={items.length === 0 ? "还没有产物" : "没有匹配项"} />}
         <div className="art-grid">
           {shown.map((a) => (
-            <ArtifactTile key={a.path} sessionId={session.id} a={a} starred={stars.includes(a.path)} run={producedBy(a, runs)} onOpen={() => setOpen(a)} />
+            <ArtifactTile key={a.path} sessionId={session.id} a={a} starred={stars.includes(a.path)} origin={originOf(a, runs)} onOpen={() => setOpen(a)} />
           ))}
         </div>
         {truncated && <div className="note">只列出最近的 {items?.length} 个</div>}
@@ -148,7 +181,7 @@ export function ArtifactsPanel({ session, active, runs, onQuote, onRun }: { sess
   );
 }
 
-function ArtifactTile({ sessionId, a, starred, run, onOpen }: { sessionId: string; a: Artifact; starred: boolean; run: ResearchRun | null; onOpen: () => void }) {
+function ArtifactTile({ sessionId, a, starred, origin, onOpen }: { sessionId: string; a: Artifact; starred: boolean; origin: Origin | null; onOpen: () => void }) {
   const ref = useRef<HTMLButtonElement | null>(null);
   const [thumb, setThumb] = useState<string | null>(null);
   const Icon = ICON[a.kind];
@@ -181,10 +214,13 @@ function ArtifactTile({ sessionId, a, starred, run, onOpen }: { sessionId: strin
       <div className={cx("art-thumb", a.kind)}>
         {thumb ? <img src={thumb} alt="" loading="lazy" /> : <Icon size={22} strokeWidth={1.4} />}
         {starred && <Star size={11} className="art-star" fill="currentColor" />}
+        {origin?.exact && origin.changed && <span className="art-flag">运行之后改过</span>}
       </div>
       <div className="art-name ellipsis">{a.name}</div>
       <div className="art-meta">
-        <span className="ellipsis">{run ? run.run_id : dir || bytes(a.size)}</span>
+        <span className="ellipsis" title={origin ? originTitle(origin) : undefined}>
+          {origin ? (origin.exact ? `出自 ${origin.run_id}` : `推断 ${origin.run_id}`) : dir || bytes(a.size)}
+        </span>
         <span>{relTime(a.mtime)}</span>
       </div>
     </button>

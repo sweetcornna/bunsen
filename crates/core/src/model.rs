@@ -505,10 +505,62 @@ pub struct RunDetail {
     pub log_tail: String,
     pub metrics: Option<serde_json::Value>,
     pub result_md: Option<String>,
+    #[serde(default)]
+    pub env: Option<RkEnv>,
+    #[serde(default)]
+    pub outputs: Option<RkOutputs>,
+}
+
+// 保留 rk 对象的未知字段；Bunsen 不重新实现插件的 schema/业务校验。
+pub type RkEnv = serde_json::Value;
+pub type RkOutputs = serde_json::Value;
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ResearchTrust {
+    pub available: bool,
+    #[serde(serialize_with = "crate::error::safe_optional")]
+    pub reason: Option<String>,
+    #[serde(serialize_with = "crate::error::safe_optional")]
+    pub rk_version: Option<String>,
+    #[serde(serialize_with = "crate::error::safe_text")]
+    pub checked_at: String,
+    #[serde(serialize_with = "crate::research_quality::safe_object")]
+    pub check: Option<serde_json::Value>,
+    #[serde(serialize_with = "crate::research_quality::safe_object")]
+    pub review: Option<serde_json::Value>,
+    #[serde(serialize_with = "crate::research_quality::safe_object")]
+    pub cite: Option<serde_json::Value>,
+    #[serde(serialize_with = "crate::research_quality::safe_object")]
+    pub plan: Option<serde_json::Value>,
+    pub failures: Vec<TrustFailure>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TrustCommand {
+    Check,
+    Review,
+    Cite,
+    Plan,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TrustFailure {
+    pub command: TrustCommand,
+    #[serde(serialize_with = "crate::error::safe_text")]
+    pub message: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ArtifactRun {
+    pub run_id: String,
+    pub verified: Option<bool>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Artifact {
+    #[serde(default)]
+    pub run: Option<ArtifactRun>,
     pub path: String,
     pub name: String,
     pub kind: String,
@@ -550,6 +602,8 @@ pub struct HostNotes {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ResearchPanel {
+    #[serde(default)]
+    pub repo_prefix: Option<String>,
     pub present: bool,
     pub home: String,
     #[serde(rename = "loop")]
@@ -558,6 +612,8 @@ pub struct ResearchPanel {
     pub summary_md: Option<String>,
     pub ideas_md: Option<String>,
     pub ledger_md: Option<String>,
+    #[serde(default)]
+    pub plan_md: Option<String>,
     pub runs: Vec<ResearchRun>,
     // v1.1
     pub overview_md: Option<String>,
@@ -637,6 +693,10 @@ pub struct ProjectMachine {
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ProjectLine {
+    #[serde(default)]
+    pub open_fails: Option<usize>,
+    #[serde(default)]
+    pub unreviewed: Option<usize>,
     pub line: String,
     pub holder: Option<String>,
     pub token: u64,
@@ -670,6 +730,8 @@ pub struct ProjectRun {
 /// `GET /api/projects/:id/view`
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ProjectView {
+    #[serde(default)]
+    pub trust: Option<ProjectTrust>,
     pub project: Project,
     pub research_head: Option<String>,
     pub machines: Vec<ProjectMachine>,
@@ -680,6 +742,14 @@ pub struct ProjectView {
     pub decisions: Option<String>,
     #[serde(serialize_with = "crate::error::safe_warnings")]
     pub warnings: Vec<String>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct ProjectTrust {
+    pub open_fails: usize,
+    pub unreviewed: usize,
+    pub unresolved_citations: usize,
+    pub retracted_citations: usize,
 }
 
 /// `POST /api/projects/:id/sync` 里一个会话的结果。
@@ -737,6 +807,7 @@ mod tests {
     #[test]
     fn research_panel_uses_loop_key() {
         let p = ResearchPanel {
+            repo_prefix: None,
             present: false,
             home: "research".into(),
             loop_: LoopInfo { on: false, started: None, blocked: None },
@@ -744,6 +815,7 @@ mod tests {
             summary_md: None,
             ideas_md: None,
             ledger_md: None,
+            plan_md: None,
             runs: vec![],
             overview_md: None,
             lessons_md: None,

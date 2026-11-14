@@ -1,0 +1,14 @@
+{
+  "ok": false,
+  "rk_version": "0.6.0",
+  "counts": {"runs":1,"overview_rows":1,"claims":3,"errors":1,"warnings":1,"notes":0},
+  "errors": [{"code":"review.open_fail","message":"数字不符 https://USER:pa'ss@host/repo","file":"LEDGER.md","ref":"C3"}],
+  "warnings": [{"code":"review.unreviewed","message":"还没核过","file":"SUMMARY.md","ref":null}],
+  "notes": [],
+  "claims": [
+    {"id":"C1","status":"已证实","text":"一致","kind":"结论","date":"2026-11-13","decisive":true,"evidence":["run:r1"],"runs":[{"run_id":"r1","state":"ok","audit":"可采信","audit_id":"a1"}],"results":[{"path":"results/r1.md","review":"reviewed","open_fails":0}],"citations":[],"review":"reviewed","trust":"ok"},
+    {"id":"C2","status":"待定","text":"未核","kind":"结论","date":"2026-11-13","decisive":false,"evidence":[],"runs":[],"results":[],"citations":[],"review":"unreviewed","trust":"warn"},
+    {"id":"C3","status":"已否定","text":"不符","kind":"结论","date":"2026-11-13","decisive":true,"evidence":[],"runs":[],"results":[],"citations":[],"review":"reviewed","trust":"fail"}
+  ],
+  "unknown": {"https://USER:secret@host/key": ["ssh://USER:secret@host/value", {"nested":"https://USER:secret@host/nested"}]}
+}

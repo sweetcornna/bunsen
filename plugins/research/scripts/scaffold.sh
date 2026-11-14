@@ -97,7 +97,21 @@ if upgrade:
         finally:
             if os.path.lexists(tmp): os.unlink(tmp)
     print('研究工具已更新：'+str(old or '无版本')+' → '+new)
-for d in ['runs','results','prereg','strategy','audits','state','handoffs']:
+# 升级旧项目也补本期瞬态文件规则，保留用户规则且重复执行不追加。
+ignore = home / '.gitignore'
+safe(ignore, home)
+text = ignore.read_text(encoding='utf-8') if ignore.exists() else ''
+for rule in (src / '.gitignore').read_text(encoding='utf-8').splitlines():
+    if rule.startswith('runs/*/.rk-') and rule not in text.splitlines():
+        text += ('' if not text or text.endswith('\n') else '\n') + rule + '\n'
+ignore.write_text(text, encoding='utf-8')
+# 旧项目的 .gitattributes 不覆盖，只补没有显式定义的摘录合并规则。
+attrs = home / '.gitattributes'
+text = attrs.read_text(encoding='utf-8') if attrs.exists() else ''
+if not any(line.strip().split()[:1] == ['sources/excerpts.md'] for line in text.splitlines()):
+    safe(attrs, home)
+    attrs.write_text(text + ('' if not text or text.endswith('\n') else '\n') + 'sources/excerpts.md merge=union\n', encoding='utf-8')
+for d in ['runs','results','prereg','strategy','audits','state','handoffs','sources']:
     safe(home/d,home);(home/d).mkdir(parents=True,exist_ok=True)
 # 显式参数才更新发现配置；自动发现不重写用户的 CRLF/多行配置。
 print('研究目录：'+str(home)+'（新建 '+str(created)+' 个文件，已有文档未动）')

@@ -191,6 +191,7 @@ pub fn router(core: Arc<Core>, token: String, port: u16, dev: bool) -> Router {
         .route("/api/sessions/{id}/git/diff", get(git_diff))
         .route("/api/sessions/{id}/research", get(research))
         .route("/api/sessions/{id}/research/run", get(research_run))
+        .route("/api/sessions/{id}/research/trust", get(research_trust))
         .route("/api/sessions/{id}/raw", get(raw))
         .route("/api/sessions/{id}/artifacts", get(artifacts))
         .route("/ws/term", get(ws_term))
@@ -564,6 +565,10 @@ async fn git(State(st): State<AppState>, Path(id): Path<String>) -> ApiResult<Gi
 
 async fn git_diff(State(st): State<AppState>, Path(id): Path<String>, Query(q): Query<HashMap<String, String>>) -> ApiResult<GitDiff> {
     ok(st.core.git_diff(&id, q.get("path").map(String::as_str)).await?)
+}
+
+async fn research_trust(State(st): State<AppState>, Path(id): Path<String>) -> ApiResult<ResearchTrust> {
+    ok(st.core.research_trust(&id).await?)
 }
 
 async fn research(State(st): State<AppState>, Path(id): Path<String>) -> ApiResult<ResearchPanel> {
@@ -1017,6 +1022,48 @@ mod tests {
         let status = response.status().as_u16();
         let bytes = axum::body::to_bytes(response.into_body(), 1024 * 1024).await.unwrap();
         (status, serde_json::from_slice(&bytes).unwrap_or(serde_json::Value::Null), bytes)
+    }
+
+    #[tokio::test]
+    async fn q14_http_file_raw_and_other_path_readers() {
+        let f = crate::quality_support::Fixture::new();
+        let app = router(f.core.clone(), "test-token".into(), 7878, false);
+        for route in ["file", "raw"] {
+            for (encoded, status) in [("+%2Fetc%2Fpasswd", 404), ("%C2%A0~%2F.ssh%2Fid_rsa", 404),
+                ("a%0Ab", 400), ("%C2%85~%2Fx", 400), ("%00", 400), ("%7F", 400), ("", 400)] {
+                let path = format!("/api/sessions/test01/{route}?path={encoded}");
+                let (actual, v, _) = project_request(&app, "GET", &path, json!(null)).await;
+                assert_eq!(actual, status, "{path}: {v}");
+                assert_eq!(v["error"]["code"], if status == 400 {"bad_request"} else {"not_found"});
+            }
+        }
+        for route in ["files", "git/diff"] {
+            let path = format!("/api/sessions/test01/{route}?path=a%0Ab");
+            assert_eq!(project_request(&app, "GET", &path, json!(null)).await.0, 400);
+        }
+    }
+
+    #[tokio::test]
+    async fn quality_http_trust_auth_and_research_detail_fields() {
+        let f = crate::quality_support::Fixture::new();
+        let app = router(f.core.clone(), "test-token".into(), 7878, false);
+        let path = "/api/sessions/test01/research/trust";
+        let req = Request::builder().uri(path).header("host", "127.0.0.1:7878").body(Body::empty()).unwrap();
+        assert_eq!(dispatch(app.clone(), req).await.status(), StatusCode::UNAUTHORIZED);
+        assert!(!f.root.join("work/research/commands").exists());
+        let (status, v, raw) = project_request(&app, "GET", path, json!(null)).await;
+        assert_eq!(status, 200);
+        assert_eq!(v["available"], true);
+        assert_eq!(v["check"]["counts"]["claims"], 3);
+        assert_eq!(v["failures"], json!([]));
+        assert!(!String::from_utf8_lossy(&raw).contains("USER"));
+        let (status, _, _) = project_request(&app, "GET", "/api/sessions/absent/research/trust", json!(null)).await;
+        assert_eq!(status, 404);
+        let (_, panel, _) = project_request(&app, "GET", "/api/sessions/test01/research", json!(null)).await;
+        assert!(panel["plan_md"].as_str().unwrap().contains("具体内容"));
+        assert_eq!(panel.get("repo_prefix"),Some(&serde_json::Value::Null));
+        let (_, run, _) = project_request(&app, "GET", "/api/sessions/test01/research/run?run_id=r1", json!(null)).await;
+        assert!(run["env"].is_object() && run["outputs"].is_object());
     }
 
     #[tokio::test]

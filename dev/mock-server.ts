@@ -14,6 +14,22 @@
 // BUNSEN_NO_LOCAL=1 时 lt7k2q 的本机会话也被跳过。atlas 上没有全局 git 提交身份：部署接入项目时第一次进某个仓库
 // 会设仓库级身份，project 一步的 detail 前面带“已设置仓库级 git 提交身份；”。
 // git 的报错按 G22 摘要：去掉固定提示，保留最后最多 3 行，用“；”连接。
+// 研究质量（第四期契约第 8 节）：
+// - 可信度 /research/trust：k7f2qa 正常（有未关闭的 fail、未核文件、撤稿、解析不到的引用、批准后改过的计划）；
+//   lc3n8p 的 rk cite check 超时、rk plan status 输出不是 JSON（两条 failures），rk review status 提前退出、输出的是
+//   {"ok": false, "error": …}（合法的 JSON 对象，服务端照样透传，前端当作没有结果）；v6h3om 仓库里的 rk.py 旧于 0.6.0（available=false）。
+// - 运行详情：r03 有环境、输入、输出（含工作目录外的文件、部分哈希、没算哈希）；r04 的 outputs.json 读不出、包清单截断、没有声明输入；
+//   r05 还在跑（没有输出清单、没有 nvidia-smi）；r02 是 0.6.0 之前的运行。
+// - 产物：装了 research 插件的对话里，tail_acc.svg 精确对应且一致，per_class.csv 精确对应但运行之后改过，confusion.svg 精确对应未比对；
+//   其余没有对应，退回按修改时间推断。没装插件的对话里都没有对应。
+// - 项目视图：lt7k2q 有 trust 和研究线计数；q2sk8d 研究分支上的 rk.py 旧于 0.6.0，trust 为 null、研究线计数为 null（Q10）。
+// 第 2 次修订（Q7–Q10）：rk 提前退出（{"ok": false, "error": …}）时对应字段为 null、failures 记一条（lc3n8p 的 review）；
+// research 带 repo_prefix（k7f2qa 等为 ""，v6h3om 不在 git 仓库里为 null，h9big1 为 "vision/"）；计划交付物带 resolved。
+// - 大数据量：h9big1 有 400 条结论、80 个未核文件、45 个未关闭问题、5000 个输出文件的运行（20261113-r09-sweep），工作目录是仓库里的 vision/。
+// - 坏记录：r01-legacy 是旧运行，运行脚本自己写了 env.json、outputs.json（形状不认识）；r04 的显卡没有 names；r05 的输入里有 null 和缺字段的项。
+// - 连不上（unreachable）的会话：research、trust、run 都回 502 host_unreachable。
+// 第 3 次修订（Q14）：/file、/raw 的 path 不 trim，为空或含控制字符（U+0000–U+001F、U+007F–U+009F）回 400 bad_request，同 Rust。
+// - 研究目录是绝对路径：a2abs9 的 .claude/research-home 首行是 /home/dev/work/longtail/research（仍在工作目录里，审查 P4F2-02）。
 // 部署请求带 accept: application/x-ndjson 时逐行流式返回，不带时返回 {session, steps} 或 422 {error, steps}（docs/API.md 部署一节）。
 // 只为了在没有 SSH 目标时看界面；真正的实现在 crates/。
 import { join, normalize } from "node:path";
@@ -72,10 +88,18 @@ const mk = (id: string, title: string, server: any, agent_id: string, workdir: s
 });
 // 接入研究项目 lt7k2q 的会话分在本机、atlas、titan 三台机器上；另有一个接入了已删除项目的会话。
 const LT = { project_id: "lt7k2q" };
+/** .claude/research-home 首行（Research.home）；没列出的会话是 "research"。 */
+const RESEARCH_HOME: Record<string, string> = { a2abs9: "/home/dev/work/longtail/research" };
+/** 契约 Q14：读文件的 path 原样使用、不 trim；为空或含控制字符时 bad_request（同 crates/core/src/workspace.rs 的 validate_read_path）。 */
+const badReadPath = (p: string) => p === "" || /[\u0000-\u001f\u007f-\u009f]/.test(p);
 let sessions: any[] = [
   mk("k7f2qa", "标签平滑对长尾分类的影响", atlas, "claude-code", "~/work/longtail", "running", 1, { plugin: "research", yolo: true, pinned: true, attached: 1, ...LT, machine: "atlas" }),
   mk("lc3n8p", "长尾：本机整理图表和 SUMMARY", local, "claude-code", "~/work/longtail", "running", 6, { plugin: "research", ...LT, machine: "mymac" }),
   mk("m2x8cd", "复现 MAE 在 ImageNet-100 上的结果", atlas, "codex", "~/work/mae-repro", "running", 14),
+  // 研究目录写成绝对路径（见 RESEARCH_HOME）。
+  mk("a2abs9", "长尾：研究目录是绝对路径", atlas, "claude-code", "~/work/longtail", "running", 9, { plugin: "research" }),
+  // 大数据量：工作目录是单体仓库里的 vision/（repo_prefix 为 "vision/"）。
+  mk("h9big1", "大数据量：全量消融扫描", atlas, "claude-code", "~/work/mono/vision", "running", 30, { plugin: "research" }),
   mk("w8e2yk", "长尾：读相关论文", local, "codex", "~/papers/longtail", "exited", 300, { ...LT }),
   // 这个仓库里的 rk.py 是没有 sync 的旧版：部署时没拿到机器代号，“立即同步”时报旧版【G18】（见 OLD_RK）。
   mk("v6h3om", "长尾：旧仓库里的补充实验", atlas, "claude-code", "~/work/longtail-old", "running", 45, { plugin: "research", ...LT }),
@@ -95,7 +119,8 @@ let settings = { theme: "dark", default_server: null, default_agent: null, resea
 const STATE_MD = `# STATE\n\n**课题**：标签平滑对长尾分类尾部类别的影响\n**阶段**：确认实验（第 2 轮）\n\n## 正在做\n\n- [x] 基线 3 个种子（76.4 ± 0.3）\n- [x] 筛选：ε ∈ {0.05, 0.1, 0.2}，单种子\n- [ ] 确认：ε = 0.1，5 个种子 —— 跑到第 3 个\n\n## 下一步\n\n等确认实验跑完后写 \`results/R-004.md\`，交给审计员核对数字出处。\n\n> 等待期间只做三件事：填满空闲显卡、准备下一批、清记录债。\n`;
 const SUMMARY_MD = `# 摘要\n\n| 设置 | 头部 | 中部 | 尾部 | 总体 |\n|---|---|---|---|---|\n| 基线 | 91.2 | 78.5 | 41.3 | 76.4 |\n| ε = 0.1（筛选） | 90.8 | 79.1 | 44.9 | 77.2 |\n\n筛选结果提示尾部有 +3.6 的提升，**尚未确认**。数字出处：\`r-0412:acc_tail\`。\n`;
 const IDEAS_MD = `# 想法池\n\n| 编号 | 想法（机制一句话） | 可证伪的预测 | 最便宜的判决性检验 | 簇 | 类型 | 新颖性核查 | 状态 | 备注 |\n|---|---|---|---|---|---|---|---|---|\n| I1 | 标签平滑削弱头部类别的过度自信，给尾部留出间隔 | ε=0.1 时尾部准确率 +2 以上，头部下降不超过 1 | 单种子 30 轮 | 正则 | 主线 | 已查，最近的是 logit adjustment | 筛选通过 | |\n| I2 | 只对头部类别做平滑，按类频率设 ε | 比统一 ε 的尾部再 +1 | 复用 I1 的配置改一行 | 正则 | 探索位 | 未查 | 候选 | |\n| I3 | 与 logit adjustment 叠加 | 两者增益可加 | 2×2 小网格 | 重加权 | 主线 | 已查 | 已预登记 | |\n| I4 | 换 focal loss | 尾部提升但总体下降 | 单种子 | 损失 | 探索位 | 已查 | 否决（已有大量负面结果） | |\n`;
-const LEDGER_MD = `# 结论账本（只追加）\n\n| 编号 | 状态 | 结论（一句话，精确到条件） | 证据 | 性质 | 日期 |\n|---|---|---|---|---|---|\n| C1 | 已证实 | ImageNet-LT、ResNet-50、90 轮下基线总体准确率 76.4 ± 0.3（3 个种子） | run:20261112-r03-smooth01; results/20261112-r03-smooth01.md | 确认 | 2026-11-11 |\n| C2 | 未决 | ε = 0.1 使尾部准确率提高约 3.6（单种子） | run:20261112-r03-smooth01 | 探索 | 2026-11-12 |\n| C3 | 已否定 | ε = 0.2 在 24G 显存下可用默认批量训练 | run:20261112-r02-smooth02 | 探索 | 2026-11-12 |\n| C4 | 已证实 | logit adjustment 在同设置下尾部 +5.1 | doi:10.48550/arXiv.2007.07314 | 文献 | 2026-11-10 |\n`;
+const LEDGER_MD = `# 结论账本（只追加）\n\n| 编号 | 状态 | 结论（一句话，精确到条件） | 证据 | 性质 | 日期 |\n|---|---|---|---|---|---|\n| C1 | 已证实 | ImageNet-LT、ResNet-50、90 轮下基线总体准确率 76.4 ± 0.3（3 个种子） | run:20261112-r03-smooth01; results/20261112-r03-smooth01.md | 确认 | 2026-11-11 |\n| C2 | 未决 | ε = 0.1 使尾部准确率提高约 3.6（单种子） | run:20261112-r03-smooth01 | 探索 | 2026-11-12 |\n| C3 | 已否定 | ε = 0.2 在 24G 显存下可用默认批量训练 | run:20261112-r02-smooth02 | 探索 | 2026-11-12 |\n| C4 | 已证实 | logit adjustment 在同设置下尾部 +5.1 | doi:10.48550/arXiv.2007.07314 | 文献 | 2026-11-10 |\n| C5 | 已证实 | 头部类别的过度自信与类频率成正比 | doi:10.5555/lt.2019.117; run:20261112-r04-smooth01-s2 | 文献 | 2026-11-12 |\n`;
+const PLAN_MD = `# 研究计划\n\n- **目标**：弄清标签平滑能不能在不伤头部的前提下提高长尾分类的尾部准确率\n- **可行性与置信度**：中等；筛选结果已有 +3.6，要 5 个种子确认\n\n## 阶段 1：基线\n\n| 编号 | 步骤 | 交付物 | 预登记 | 状态 |\n|---|---|---|---|---|\n| 1.1 | 复现基线 3 个种子 | results/20261111-r01-base.md | prereg/P-001-baseline.md | 完成 |\n| 1.2 | 逐类准确率图 | figures/per_class_base.png | - | 完成 |\n\n## 阶段 2：标签平滑\n\n| 编号 | 步骤 | 交付物 | 预登记 | 状态 |\n|---|---|---|---|---|\n| 2.1 | 筛选 ε | results/20261112-r03-smooth01.md | - | 完成 |\n| 2.2 | 确认 ε=0.1，5 个种子 | results/20261113-r07-confirm.md | prereg/P-002-smoothing.md | 进行中 |\n| 2.3 | 与 logit adjustment 叠加 | - | - | 待办 |\n| 2.4 | 换 focal loss | - | - | 放弃 |\n\n## 偏离记录\n\n| 日期 | 步骤 | 偏离 | 原因 |\n|---|---|---|---|\n| 2026-11-12 | 2.1 | ε=0.2 改成批量减半重跑 | 24G 显存放不下默认批量 |\n`;
 const DIFF = `diff --git a/train.py b/train.py\nindex 3f1c2ab..9d04e77 100644\n--- a/train.py\n+++ b/train.py\n@@ -41,7 +41,9 @@ def build_loss(cfg):\n     if cfg.loss == "ce":\n-        return nn.CrossEntropyLoss()\n+        return nn.CrossEntropyLoss(label_smoothing=cfg.smoothing)\n+    if cfg.loss == "focal":\n+        return FocalLoss(gamma=cfg.gamma)\n     raise ValueError(cfg.loss)\n`;
 
 // 部署步骤（契约 v1.3 第 2 节：workdir 与 plugin 之间多一步 project）。本机不经 ssh，第一步叫“检查本机”。
@@ -119,7 +144,8 @@ const stepsFor = (srv: any, agentId: string, workdir: string): [string, string, 
 
 // lines、decisions 是汇合点上的原文（含模板占位），出视图时按 G21、G21′ 处理（见 viewOf）。
 // skipped：因过大或过多没有读入视图的文件，按分支记；警告里的 N 按去重后的路径计【G14、G23】。
-type Hub = { research_head: string | null; machines: any[]; lines: any[]; runs: any[]; decisions: string | null; skipped?: { branch: string; path: string }[] };
+// rk：研究分支上 rk.py 的 RK_VERSION；trust、各线的 open_fails/unreviewed 是在镜像里按契约 8.5 数出来的结果（编的）。
+type Hub = { research_head: string | null; machines: any[]; lines: any[]; runs: any[]; decisions: string | null; skipped?: { branch: string; path: string }[]; rk?: string; trust?: any };
 const sha = (s: string) => {
   let h = 2166136261;
   let out = "";
@@ -162,13 +188,13 @@ const hubs: Record<string, Hub> = {
     ],
     lines: [
       // 阶段写了、“在等什么”还是模板占位：视图里为 null【G21′】。
-      { line: "baseline", holder: "mymac", token: 3, stamped: ago(15 * H), stage: "已完成：3 个种子 76.4 ± 0.3", waiting: "<无 | 运行 ID（等待器已在后台）| 子代理 | 用户的决定>", updated: "2026-11-11 21:40", next: ["- 把基线表格并进 SUMMARY", "- 交给审计员核对 C1 的数字出处"], source: BRANCH_LT },
+      { open_fails: 0, unreviewed: 1, line: "baseline", holder: "mymac", token: 3, stamped: ago(15 * H), stage: "已完成：3 个种子 76.4 ± 0.3", waiting: "<无 | 运行 ID（等待器已在后台）| 子代理 | 用户的决定>", updated: "2026-11-11 21:40", next: ["- 把基线表格并进 SUMMARY", "- 交给审计员核对 C1 的数字出处"], source: BRANCH_LT },
       { line: "logit-adj", holder: null, token: 1, stamped: ago(40 * H), stage: "想法：与标签平滑叠加（I3）", waiting: "等 smoothing 线的确认结论", updated: "2026-11-10 18:02", next: ["1. 写预登记 P-003", "2. 2×2 小网格：ε × τ", "3. <…>"], source: BRANCH_LT }, // 第 3 项是模板占位，跳过【G21′】
       { line: "reweight", holder: "titan", token: 2, stamped: ago(32 * H), stage: "探索：类频率重加权", waiting: "titan 离线，r04、r05 还没拉回", updated: "2026-11-11 04:10", next: ["- titan 恢复后 rk sync", "- 比较 sqrt 与 class-balanced 两种权重"], source: "sync/titan" },
       // rk line new focal 刚建：正文除了“最后更新”都还是模板占位，阶段、在等什么为 null，下一步为空【G21′】。
       // 编号相同时以推进者自己分支上的那份为准，所以并入研究分支以后也还是“取自 sync/mymac”。
       { line: "focal", holder: "mymac", token: 1, stamped: ago(4), stage: "<调研 | 发散 | 派工 | 运行中 | 审核 | 受阻 | 收尾>", waiting: "<无 | 运行 ID（等待器已在后台）| 子代理 | 用户的决定>", updated: `${ago(4).slice(0, 19)}+00:00`, next: ["1. <…>"], source: "sync/mymac" },
-      { line: "smoothing", holder: "atlas", token: 5, stamped: ago(20), stage: "确认实验（第 2 轮）", waiting: "seed 3 跑到第 41 轮，约 38 分钟", updated: "2026-11-12 09:55", next: ["- [ ] seed 3、4、5 跑完", "- [ ] 写 results/…-r07.md", "- [ ] 交审计员核对数字出处"], source: "sync/atlas" },
+      { open_fails: 2, unreviewed: 1, line: "smoothing", holder: "atlas", token: 5, stamped: ago(20), stage: "确认实验（第 2 轮）", waiting: "seed 3 跑到第 41 轮，约 38 分钟", updated: "2026-11-12 09:55", next: ["- [ ] seed 3、4、5 跑完", "- [ ] 写 results/…-r07.md", "- [ ] 交审计员核对数字出处"], source: "sync/atlas" },
     ],
     runs: [
       run(null, 1, "pilot", "explore", null, 7 * 24 * H, 35, 0, "旧格式的运行 ID（没有机器代号）", true),
@@ -198,6 +224,8 @@ const hubs: Record<string, Hub> = {
       run("atlas", 12, "eval-tta", "explore", "logit-adj", 5 * 24 * H, 20, 0, "测试时增强对尾部的影响", true),
     ],
     // 第一行是 SUMMARY 模板的占位，不算正文【G21】。
+    rk: "0.6.0",
+    trust: { open_fails: 3, unreviewed: 4, unresolved_citations: 1, retracted_citations: 1 },
     decisions:
       "- <问题；证据；建议；在得到答复前按哪个最稳妥的默认继续。没有就写“无”>\n- **smoothing 线要不要加到 5 个种子？** 现在 3 个种子的差距是 +3.4 ± 0.6；再加两个种子要 atlas 两张卡约 1.5 小时。\n- **titan 离线两天了**：reweight 线的 r04、r05 只在 titan 上。等它恢复，还是在 atlas 上重跑 r04？\n\n![尾部类别准确率随 ε 的变化](https://example.com/longtail/fig-tail.png)",
   },
@@ -206,6 +234,7 @@ const hubs: Record<string, Hub> = {
     machines: [{ code: "gpuold", head: sha("old-ablation"), committed_at: ago(9 * 24 * H), subject: "rk sync：gpuold 并入 research/old-ablation", ahead: 0, behind: 0, conflict: null }],
     lines: [{ line: "ablate", holder: "gpuold", token: 4, stamped: ago(9 * 24 * H), stage: "收尾：消融表格已进 SUMMARY", waiting: "<无 | 运行 ID（等待器已在后台）| 子代理 | 用户的决定>", updated: "2026-11-04 17:20", next: ["1. <…>"], source: "research/old-ablation" }],
     runs: [],
+    rk: "0.5.0", // 研究分支上的 rk.py 旧于 0.6.0：trust 为 null，各线计数为 0（契约 8.5）
     // 只剩模板占位和“无”：视图里为 null【G21】。
     decisions: "- <问题；证据；建议；在得到答复前按哪个最稳妥的默认继续。没有就写“无”>\n- 无",
   },
@@ -285,8 +314,10 @@ function decisionsOf(raw: string | null): string | null {
   return !text || kept.every((l) => !itemText(l) || itemText(l) === "无") ? null : text;
 }
 /** 研究线：阶段、在等什么是模板占位时为 null；下一步跳过占位项后取前 3 项【G21′】。 */
-const lineOf = (l: any) => ({
+const lineOf = (l: any, counted: boolean) => ({
   ...l,
+  open_fails: counted ? (l.open_fails ?? 0) : null,
+  unreviewed: counted ? (l.unreviewed ?? 0) : null,
   stage: l.stage && !placeholder(l.stage) ? l.stage : null,
   waiting: l.waiting && !placeholder(l.waiting) ? l.waiting : null,
   next: l.next.filter((n: string) => !placeholder(n)).slice(0, 3),
@@ -313,15 +344,27 @@ function viewOf(p: any) {
   const skipped = new Set((h.skipped ?? []).map((x) => x.path)).size; // 同一路径在几个分支上都没读只算 1 个【G23】
   if (skipped) warnings.push(`汇合点里有 ${skipped} 个文件过大或过多，没有读入视图`); // 末尾【G14】
   const t = (r: any) => (r.started_at ? Date.parse(r.started_at) : -Infinity);
+  // 研究分支上的 rk.py ≥ 0.6.0 才数（契约 8.5）；警告放在 G14 那条之前。
+  const counted = Boolean(h.research_head && h.rk && h.rk >= "0.6.0");
+  const trust = counted ? { open_fails: 0, unreviewed: 0, unresolved_citations: 0, retracted_citations: 0, ...h.trust } : null;
+  if (trust) {
+    const at = skipped ? warnings.length - 1 : warnings.length;
+    const add: string[] = [];
+    if (trust.open_fails > 0 || trust.unreviewed > 0) add.push(`研究分支上有 ${trust.open_fails} 个未关闭的核对问题、${trust.unreviewed} 个结论文件还没核过`);
+    if (trust.unresolved_citations > 0) add.push(`研究分支上有 ${trust.unresolved_citations} 条引用解析不到`);
+    if (trust.retracted_citations > 0) add.push(`研究分支上有 ${trust.retracted_citations} 篇被引文献已撤稿`);
+    warnings.splice(at, 0, ...add);
+  }
   return {
     project: p,
     research_head: h.research_head,
     machines,
-    lines: h.lines.map(lineOf).sort((a, b) => a.line.localeCompare(b.line)),
+    lines: h.lines.map((l) => lineOf(l, counted)).sort((a, b) => a.line.localeCompare(b.line)),
     runs: [...h.runs].sort((a, b) => t(b) - t(a)).slice(0, 500),
     members,
     decisions: decisionsOf(h.decisions),
     warnings,
+    trust,
   };
 }
 
@@ -414,6 +457,220 @@ function joinProject(p: any, srv: any, workdir: string): Join {
     hub.machines.push({ code: machine, head: hub.research_head, committed_at: new Date().toISOString(), subject: `rk sync --setup：${machine} 接入`, ahead: 0, behind: 0, conflict: null });
   return { ok: true, machine, detail: `${identity}${how} · rk sync --setup · 代号 ${machine}` };
 }
+
+// ---------- 研究质量（第四期契约第 8 节）----------
+// rk check / review status / cite check / plan status 的 --json 输出，形状按契约第 2.2、4.2、5.3、7 节。
+const RID = { r01: "20261112-r01-legacy", r02: "20261112-r02-smooth02", r03: "20261112-r03-smooth01", r04: "20261112-r04-smooth01-s2", r05: "20261112-r05-smooth01-s3" };
+const R03_MD = `results/${RID.r03}.md`;
+const hex64 = (s: string) => (sha(s) + sha(`${s}/2`)).slice(0, 64);
+const issue = (code: string, message: string, file: string | null = null, ref: string | null = null) => ({ code, message, file, ref });
+const TRUST_CHECK = {
+  ok: false,
+  rk_version: "0.6.0",
+  counts: { runs: 4, overview_rows: 3, claims: 5, errors: 7, warnings: 9, notes: 1 },
+  errors: [
+    issue("review.claim_open_fail", "C1 的账本行和它引用的结果页上有未关闭的核对问题", R03_MD, "C1"),
+    issue("review.result_unreviewed", `C1 引用的结果页 ${R03_MD} 改过之后还没核对`, R03_MD, "C1"),
+    issue("prov.unknown_decisive", "图 figures/confusion_old.svg 不在任何运行的输出清单里，而这张结果页被 C1 引用", R03_MD, "C1"),
+    issue("cite.retracted_decisive", "C5 的证据 doi:10.5555/lt.2019.117 已撤稿", "LEDGER.md", "C5"),
+    issue("cite.not_found", "doi:10.9999/nonexistent.2024.001 解析不到：可能写错了", `${R03_MD}:22`, "doi:10.9999/nonexistent.2024.001"),
+    issue("plan.deliverable_missing", "步骤 1.2 标为完成，交付物 figures/per_class_base.png 不存在", "PLAN.md", "1.2"),
+    issue("stage.table_invalid", "（演示）一个前端不认识前缀的检查：STATE.md 的研究线表少了“持有者”列", "STATE.md", null),
+  ],
+  warnings: [
+    issue("review.unreviewed", "SUMMARY.md 还没核对", "SUMMARY.md", null),
+    issue("review.unreviewed", `results/${RID.r04}.md 还没核对`, `results/${RID.r04}.md`, null),
+    issue("review.open_fail", "strategy/S-001.md 第 9 行有未关闭的核对问题", "strategy/S-001.md", "review-20261113-084000-mymac#2"),
+    issue("cite.unchecked", "arXiv:2310.01234 还没查过：执行 rk cite check", "OVERVIEW.md", "arXiv:2310.01234"),
+    issue("cite.no_excerpt", "C4 用了外部文献作证据，sources/excerpts.md 里没有对应的摘录", "LEDGER.md", "C4"),
+    issue("prov.no_inputs", `预登记运行 ${RID.r04} 没有声明输入`, `runs/${RID.r04}`, RID.r04),
+    issue("plan.changed_unlogged", "PLAN.md 批准之后改过，偏离记录却没有新增行", "PLAN.md", null),
+    issue("line.stale", "研究线 reweight 两天没有更新", "state/reweight.md", "reweight"),
+    issue("index.runs_missing", "RUNS.md 少了 1 条运行", "RUNS.md", null),
+  ],
+  notes: [issue("sync.behind", "本机比研究分支落后 2 个提交，下次 rk sync 时并入", null, null)],
+  claims: [
+    { id: "C1", status: "已证实", text: "ImageNet-LT、ResNet-50、90 轮下基线总体准确率 76.4 ± 0.3（3 个种子）", kind: "确认", date: "2026-11-11", decisive: true, evidence: [`run:${RID.r03}`, R03_MD],
+      runs: [{ run_id: RID.r03, state: "done", audit: "可采信", audit_id: "20261112-093000-atlas" }], results: [{ path: R03_MD, review: "unreviewed", open_fails: 1 }], citations: [], review: "reviewed", trust: "fail" },
+    { id: "C2", status: "未决", text: "ε = 0.1 使尾部准确率提高约 3.6（单种子）", kind: "探索", date: "2026-11-12", decisive: false, evidence: [`run:${RID.r03}`, `run:${RID.r04}`],
+      runs: [{ run_id: RID.r03, state: "done", audit: "可采信", audit_id: "20261112-093000-atlas" }, { run_id: RID.r04, state: "done", audit: null, audit_id: null }], results: [], citations: [], review: "unreviewed", trust: "warn" },
+    { id: "C3", status: "已否定", text: "ε = 0.2 在 24G 显存下可用默认批量训练", kind: "探索", date: "2026-11-12", decisive: true, evidence: [`run:${RID.r02}`],
+      runs: [{ run_id: RID.r02, state: "failed", audit: "需退回", audit_id: "20261112-110000-atlas" }], results: [], citations: [], review: "reviewed", trust: "ok" },
+    { id: "C4", status: "已证实", text: "logit adjustment 在同设置下尾部 +5.1", kind: "文献", date: "2026-11-10", decisive: true, evidence: ["doi:10.48550/arXiv.2007.07314"],
+      runs: [], results: [], citations: [{ id: "doi:10.48550/arxiv.2007.07314", status: "ok" }], review: "reviewed", trust: "warn" },
+    { id: "C5", status: "已证实", text: "头部类别的过度自信与类频率成正比", kind: "文献", date: "2026-11-12", decisive: true, evidence: ["doi:10.5555/lt.2019.117", `run:${RID.r04}`],
+      runs: [{ run_id: RID.r04, state: "done", audit: "不可采信", audit_id: "20261113-071500-atlas" }], results: [{ path: `results/${RID.r04}.md`, review: "unreviewed", open_fails: 0 }, { path: "results/20261110-r00-missing.md", review: "missing", open_fails: 0 }], citations: [{ id: "doi:10.5555/lt.2019.117", status: "retracted" }, { id: "arXiv:2310.01234", status: "unchecked" }], review: "unreviewed", trust: "fail" },
+  ],
+};
+const TRUST_REVIEW = {
+  rk_version: "0.6.0",
+  files: [
+    { path: "LEDGER.md", sha256: hex64("ledger"), state: "reviewed", open_fails: 1, last_review: "review-20261112-101500-atlas", last_reviewed_sha256: hex64("ledger") },
+    { path: "OVERVIEW.md", sha256: hex64("overview"), state: "blank", open_fails: 0, last_review: null, last_reviewed_sha256: null },
+    { path: "SUMMARY.md", sha256: hex64("summary"), state: "unreviewed", open_fails: 0, last_review: null, last_reviewed_sha256: null },
+    { path: R03_MD, sha256: hex64("r03-now"), state: "unreviewed", open_fails: 1, last_review: "review-20261112-101500-atlas", last_reviewed_sha256: hex64("r03-then") },
+    { path: `results/${RID.r04}.md`, sha256: hex64("r04"), state: "unreviewed", open_fails: 0, last_review: null, last_reviewed_sha256: null },
+    { path: "strategy/S-001.md", sha256: hex64("s001"), state: "reviewed", open_fails: 1, last_review: "review-20261113-084000-mymac", last_reviewed_sha256: hex64("s001") },
+  ],
+  open_fails: [
+    { ref: "review-20261112-101500-atlas#1", review_id: "review-20261112-101500-atlas", file: R03_MD, line: 18, row: null, type: "number", claim: "表里写尾部准确率 44.9", evidence: [`runs/${RID.r03}/metrics.json:acc_tail`], note: "metrics.json 里是 0.446，结果页四舍五入成了 44.9", recorded_at: ago(900) },
+    { ref: "review-20261112-101500-atlas#3", review_id: "review-20261112-101500-atlas", file: "LEDGER.md", line: 7, row: "C1", type: "action", claim: "C1 写的是 3 个种子", evidence: [`runs/${RID.r03}/meta.json`], note: "只找到 2 个种子的运行记录", recorded_at: ago(900) },
+    { ref: "review-20261113-084000-mymac#2", review_id: "review-20261113-084000-mymac", file: "strategy/S-001.md", line: 9, row: null, type: "figure", claim: "图 2 的标注写 n=5", evidence: ["figures/fig2.csv"], note: "数据文件里只有 3 个种子", recorded_at: ago(200) },
+  ],
+  problems: 6,
+};
+const TRUST_CITE = {
+  ok: false, rk_version: "0.6.0", checked: 0, skipped: 0,
+  items: [
+    { id: "arXiv:2310.01234", status: "unchecked", files: ["OVERVIEW.md:14", "LEDGER.md:9"], cache: null, title: null, error: null },
+    { id: "doi:10.48550/arxiv.2007.07314", status: "ok", files: ["LEDGER.md:8"], cache: "sources/doi-10.48550_arxiv.2007.07314-3f2a91bc@atlas.json", title: "Long-tail learning via logit adjustment", error: null },
+    { id: "doi:10.5555/lt.2019.117", status: "retracted", files: ["LEDGER.md:9", `${R03_MD}:30`], cache: "sources/doi-10.5555_lt.2019.117-9b1e0c44@mymac.json", title: "RETRACTED: Overconfidence of head classes in long-tailed recognition", error: null },
+    { id: "doi:10.9999/nonexistent.2024.001", status: "not_found", files: [`${R03_MD}:22`], cache: "sources/doi-10.9999_nonexistent.2024.001-0d7e55aa@atlas.json", title: null, error: null },
+  ],
+};
+const TRUST_PLAN = {
+  present: true, approved: true, approved_at: ago(3 * 24 * 60), changed_since_approval: true, deviations_since_approval: 1,
+  phases: [
+    { title: "阶段 1：基线", steps: [
+      { id: "1.1", step: "复现基线 3 个种子", status: "完成", prereg: "prereg/P-001-baseline.md", deliverables: [{ path: "results/20261111-r01-base.md", exists: true, resolved: "research/results/20261111-r01-base.md" }] },
+      { id: "1.2", step: "逐类准确率图", status: "完成", prereg: null, deliverables: [{ path: "figures/per_class_base.png", exists: false, resolved: null }] },
+    ] },
+    { title: "阶段 2：标签平滑", steps: [
+      { id: "2.1", step: "筛选 ε", status: "完成", prereg: null, deliverables: [{ path: R03_MD, exists: true, resolved: `research/${R03_MD}` }] },
+      { id: "2.2", step: "确认 ε=0.1，5 个种子", status: "进行中", prereg: "prereg/P-002-smoothing.md", deliverables: [{ path: "results/20261113-r07-confirm.md", exists: false, resolved: null }] },
+      { id: "2.3", step: "与 logit adjustment 叠加", status: "待办", prereg: null, deliverables: [] },
+      { id: "2.4", step: "换 focal loss", status: "放弃", prereg: null, deliverables: [] },
+    ] },
+  ],
+};
+// 可信度：按会话给出几种情形（见文件开头）。
+function trustOf(s: any) {
+  const base = { rk_version: "0.6.0", checked_at: new Date().toISOString() };
+  if (oldRk(s)) return { ...base, available: false, reason: "这台机器上仓库里的 rk.py 是 0.5.0，旧于 0.6.0：在这台机器上执行 /research:resume 升级研究工具", rk_version: "0.5.0", check: null, review: null, cite: null, plan: null, failures: [] };
+  if (s.id === "lc3n8p")
+    // rk review status 提前退出、输出 {"ok": false, "error": …}：按 Q7 字段为 null，failures 记 error。
+    return { ...base, available: true, reason: null, check: TRUST_CHECK, review: null, cite: null, plan: null, failures: [
+      { command: "review", message: "LEDGER.md 第 7 行的表格少了一列，读不出账本" },
+      { command: "cite", message: "60 秒没有完成" },
+      { command: "plan", message: "输出不是 JSON 对象：Traceback (most recent call last)；  File \"research/tools/rk.py\", line 2210, in plan_status；KeyError: '状态'" },
+    ] };
+  if (s.id === BIG_SESSION) return { ...base, available: true, reason: null, ...bigTrust(), failures: [] };
+  return { ...base, available: true, reason: null, check: TRUST_CHECK, review: TRUST_REVIEW, cite: TRUST_CITE, plan: TRUST_PLAN, failures: [] };
+}
+
+// ---------- 大数据量会话 h9big1 ----------
+const BIG_SESSION = "h9big1";
+const SWEEP = "20261113-r09-sweep";
+const pad4 = (i: number) => String(i).padStart(4, "0");
+let bigCache: any = null;
+function bigTrust() {
+  if (bigCache) return bigCache;
+  const N = 400;
+  const resPath = (i: number) => `results/${SWEEP}-${pad4(i)}.md`;
+  const claims = Array.from({ length: N }, (_, i) => {
+    const id = `C${i + 1}`;
+    const status = ["已证实", "未决", "已否定"][i % 3];
+    const unrev = i % 5 === 0;
+    const cites = i === 1 ? [{ id: "doi:10.1000/a#b?c%d", status: "ok" }] : i % 6 === 0 ? [{ id: `doi:10.5555/sweep.${i}`, status: i % 12 === 0 ? "not_found" : "ok" }] : [];
+    return {
+      id, status, text: `配置 cfg-${pad4(i)} 下尾部准确率比基线高 ${((i % 50) / 10).toFixed(1)}（第 ${(i % 5) + 1} 轮扫描）`, kind: i % 2 ? "探索" : "确认", date: "2026-11-13", decisive: status !== "未决",
+      evidence: [`run:${SWEEP}`, resPath(i)],
+      runs: [{ run_id: SWEEP, state: "done", audit: i % 4 === 0 ? null : i % 11 === 0 ? "需退回" : "可采信", audit_id: null }],
+      results: [{ path: resPath(i), review: unrev ? "unreviewed" : "reviewed", open_fails: i % 9 === 0 ? 1 : 0 }],
+      citations: cites,
+      review: unrev ? "unreviewed" : "reviewed",
+      trust: i % 9 === 0 ? "fail" : unrev ? "warn" : "ok",
+    };
+  });
+  const errors = claims.flatMap((c, i) => [
+    ...(i % 9 === 0 ? [issue("review.claim_open_fail", `${c.id} 引用的结果页上有未关闭的核对问题`, resPath(i), c.id)] : []),
+    ...(i % 5 === 0 && c.decisive ? [issue("review.claim_unreviewed", `${c.id} 的账本行还没核过`, "LEDGER.md", c.id)] : []),
+  ]);
+  const warnings = claims.filter((_, i) => i % 5 === 0).map((c, k) => issue("review.unreviewed", `${resPath(k * 5)} 还没核对`, resPath(k * 5), null));
+  const files = claims.map((c, i) => ({ path: resPath(i), sha256: hex64(`big-${i}`), state: i % 5 === 0 ? "unreviewed" : "reviewed", open_fails: i % 9 === 0 ? 1 : 0, last_review: null, last_reviewed_sha256: null }));
+  const openFails = claims.filter((_, i) => i % 9 === 0).map((c, k) => ({ ref: `review-20261113-0${String(k).padStart(5, "0")}-atlas#1`, review_id: `review-20261113-0${String(k).padStart(5, "0")}-atlas`, file: resPath(k * 9), line: 12, row: null, type: "number", claim: `表里写的尾部准确率和 metrics.json 不一致（cfg-${pad4(k * 9)}）`, evidence: [`runs/${SWEEP}/cfg-${pad4(k * 9)}/metrics.json:acc_tail`], note: "差 0.3", recorded_at: ago(100 + k) }));
+  const citeItems = claims.flatMap((c) => c.citations).map((x) => ({ id: x.id, status: x.status, files: ["LEDGER.md:9"], cache: null, title: x.status === "ok" ? "Sweep reference" : null, error: null }));
+  const steps = (ph: number) => Array.from({ length: 10 }, (_, k) => {
+    const n = ph * 10 + k;
+    const done = n < 35;
+    return { id: `${ph + 1}.${k + 1}`, step: `扫描第 ${n + 1} 组配置`, status: n === 37 ? null : done ? "完成" : n < 40 ? "进行中" : "待办", prereg: null,
+      deliverables: [{ path: `results/${SWEEP}-${pad4(n)}.md`, exists: done, resolved: done ? `vision/research/results/${SWEEP}-${pad4(n)}.md` : null }] };
+  });
+  bigCache = {
+    check: { ok: false, rk_version: "0.6.0", counts: { runs: 6, overview_rows: 0, claims: N, errors: errors.length, warnings: warnings.length, notes: 0 }, errors, warnings, notes: [], claims },
+    review: { rk_version: "0.6.0", files, open_fails: openFails, problems: openFails.length + files.filter((f) => f.state === "unreviewed").length },
+    cite: { ok: false, rk_version: "0.6.0", checked: 0, skipped: 0, items: citeItems.sort((a, b) => a.id.localeCompare(b.id)) },
+    plan: { present: true, approved: true, approved_at: ago(2 * 24 * 60), changed_since_approval: false, deviations_since_approval: 0, phases: Array.from({ length: 8 }, (_, ph) => ({ title: `阶段 ${ph + 1}：第 ${ph + 1} 批配置`, steps: steps(ph) })) },
+  };
+  return bigCache;
+}
+function sweepOutputs() {
+  const names = ["metrics.json", "curve.csv", "fig.svg"];
+  const files = Array.from({ length: 5000 }, (_, i) => {
+    const path = i % 10 === 9 ? `data/cache/cfg-${pad4(i)}.npy` : `vision/outputs/sweep/cfg-${pad4(i)}/${names[i % 3]}`;
+    return { path, sha256: hex64(path), size: 1000 + i, partial: false, unhashed: false };
+  });
+  return { version: 1, run_id: SWEEP, written_at: ago(40), truncated: true, files: files.sort((a, b) => a.path.localeCompare(b.path)) };
+}
+
+// 运行的环境、输入、输出（契约 3.1–3.3、8.2）。旧运行（r02）没有 rk_version，也没有这些记录。
+const PIP = ["numpy==1.26.4", "pandas==2.2.3", "pillow==10.4.0", "pyyaml==6.0.2", "scikit-learn==1.5.2", "scipy==1.14.1", "tensorboard==2.18.0", "timm==1.0.11", "torch==2.4.1+cu121", "torchvision==0.19.1+cu121", "tqdm==4.66.5", "wandb==0.18.5", ...Array.from({ length: 64 }, (_, i) => `dep-${String(i + 1).padStart(2, "0")}==0.${i % 9}.${i % 4}`)].sort();
+const envOf = (kind: "full" | "conda" | "nogpu") => ({
+  version: 1,
+  captured_at: ago(kind === "nogpu" ? 25 : 399),
+  python: { executable: kind === "conda" ? "/home/dev/miniconda3/envs/lt/bin/python" : "/home/dev/work/longtail/.venv/bin/python", version: "3.10.12" },
+  packages: kind === "conda" ? { tool: "conda", lines: Array.from({ length: 2000 }, (_, i) => `pkg-${i}=1.${i % 10}.0=py310_${i % 3}`), truncated: true } : { tool: "pip", lines: PIP, truncated: false },
+  // conda 那份的 gpu 缺 names（坏记录，前端要兜住）
+  gpu: kind === "nogpu" ? null : kind === "conda" ? { driver: "535.183.01", cuda: "12.2" } : { driver: "535.183.01", cuda: "12.2", names: ["NVIDIA GeForce RTX 3090", "NVIDIA GeForce RTX 3090", "NVIDIA GeForce RTX 3090", "NVIDIA GeForce RTX 3090"] },
+  os: { system: "Linux", release: "5.15.0-119-generic", machine: "x86_64", platform: "Linux-5.15.0-119-generic-x86_64-with-glibc2.35" },
+  host: "atlas",
+  fingerprint: hex64(`env-${kind}`),
+});
+function provenanceOf(rid: string) {
+  if (rid === RID.r02) return { meta: {}, env: null, outputs: null };
+  // 旧运行，运行脚本自己写了同名的 env.json、outputs.json：服务端照样带回，前端要认出格式不对（审查 P4F1-01）。
+  if (rid === RID.r01) return { meta: {}, env: { version: 2, python: "3.10", cuda: true }, outputs: { predictions: [0.12, 0.88], files: "all" } };
+  if (rid === SWEEP)
+    return {
+      meta: { rk_version: "0.6.0", inputs: [
+        { path: "vision/configs/sweep.yaml", type: "file", sha256: hex64("sweep.yaml"), size: 3400, files: null, partial: false, unhashed: false },
+        { path: "data/shared/labels.csv", type: "file", sha256: hex64("labels.csv"), size: 88_000, files: null, partial: false, unhashed: false },
+      ], outs: ["vision/outputs/sweep", "data/cache"], env_sha256: hex64("env-sweep"), outputs_sha256: hex64("outputs-sweep") },
+      env: envOf("full"),
+      outputs: sweepOutputs(),
+    };
+  const file = (path: string, size: number, extra: any = {}) => ({ path, sha256: hex64(path), size, partial: false, unhashed: false, ...extra });
+  if (rid === RID.r03) {
+    const outputs = { version: 1, run_id: rid, written_at: ago(10), truncated: false, files: [
+      file("/scratch/dev/cache/ckpt_best.pt", 412 * 1024 * 1024, { partial: true }),
+      file("/scratch/dev/cache/features.npy", 9.6 * 1024 ** 3, { sha256: null, unhashed: true }),
+      file("figures/tail_acc.svg", 5200),
+      file("outputs/per_class.csv", 18230),
+      file(`research/runs/${rid}/metrics.json`, 412),
+      // 不在 git 仓库里的会话（v6h3om，repo_prefix 为 null）只有这种落在它工作目录里的绝对路径能点开
+      file("/home/dev/work/longtail-old/notes/plot.svg", 2300),
+    ] };
+    return {
+      meta: { rk_version: "0.6.0", inputs: [
+        { path: "configs/smooth.yaml", type: "file", sha256: hex64("smooth.yaml"), size: 1240, files: null, partial: false, unhashed: false },
+        { path: "/data/imagenet-lt", type: "dir", sha256: hex64("imagenet-lt"), size: 148 * 1024 ** 3, files: 10000, partial: true, unhashed: false },
+        { path: "/data/imagenet-lt-features.npy", type: "file", sha256: null, size: 9.2 * 1024 ** 3, files: null, partial: false, unhashed: true },
+      ], outs: ["figures", "outputs", "/scratch/dev/cache"], env_sha256: hex64("env-r03"), outputs_sha256: hex64("outputs-r03") },
+      env: envOf("full"),
+      outputs,
+    };
+  }
+  if (rid === RID.r04) return { meta: { rk_version: "0.6.0", inputs: [], outs: [], env_sha256: hex64("env-r04"), outputs_sha256: hex64("outputs-r04") }, env: envOf("conda"), outputs: null };
+  // r05 的输入里混了 null 和缺字段的项（坏记录，前端要兜住，审查 P4F1-12）
+  if (rid === RID.r05) return { meta: { rk_version: "0.6.0", inputs: [{ path: "configs/smooth.yaml", type: "file", sha256: hex64("smooth.yaml"), size: 1240, files: null, partial: false, unhashed: false }, null, { path: "configs/extra.yaml", type: "file" }, { type: "file" }], outs: ["figures"], env_sha256: hex64("env-r05") }, env: envOf("nogpu"), outputs: null };
+  return { meta: {}, env: null, outputs: null };
+}
+// 产物与运行的精确对应（契约 8.3）：verified true 一致、false 运行之后改过、null 没比对。
+const ARTIFACT_RUN: Record<string, { run_id: string; verified: boolean | null }> = {
+  "figures/tail_acc.svg": { run_id: RID.r03, verified: true },
+  "outputs/per_class.csv": { run_id: RID.r03, verified: false },
+  "figures/confusion.svg": { run_id: RID.r04, verified: null },
+};
 
 async function serveStatic(pathname: string): Promise<Response> {
   const rel = normalize(pathname).replace(/^(\.\.[/\\])+/, "");
@@ -677,17 +934,20 @@ Bun.serve<{ title: string }, never>({
       }
       if (seg[2] === "file") {
         const path = url.searchParams.get("path") ?? "";
+        if (badReadPath(path)) return fail(400, "bad_request", "path 不能为空或含控制字符");
         const text = path.endsWith(".md") ? STATE_MD : `import torch\nfrom torch import nn\n\n\ndef build_loss(cfg):\n    if cfg.loss == "ce":\n        return nn.CrossEntropyLoss(label_smoothing=cfg.smoothing)\n    if cfg.loss == "focal":\n        return FocalLoss(gamma=cfg.gamma)\n    raise ValueError(cfg.loss)\n`;
         return json({ path, size: text.length, binary: false, truncated: false, text });
       }
       if (seg[2] === "git" && !seg[3]) return json({ is_repo: true, branch: "exp/label-smoothing", changes: [{ path: "train.py", status: " M" }, { path: "configs/smooth.yaml", status: "??" }, { path: "research/STATE.md", status: " M" }] });
       if (seg[2] === "git" && seg[3] === "diff") return json({ diff: url.searchParams.get("path") === "configs/smooth.yaml" ? "" : DIFF });
       if (seg[2] === "artifacts") {
-        const mkA = (path: string, kind: string, size: number, min: number) => ({ path, name: path.split("/").pop(), kind, size, mtime: ago(min) });
+        // 精确对应只在装了 research 插件（有运行记录）的对话里有；没有 python3 的服务器上一律为 null（契约 8.3）。
+        const mkA = (path: string, kind: string, size: number, min: number) => ({ path, name: path.split("/").pop(), kind, size, mtime: ago(min), run: s.plugin === "research" ? (ARTIFACT_RUN[path] ?? null) : null });
         return json({ truncated: false, items: [mkA("figures/tail_acc.svg", "image", 5200, 12), mkA("figures/confusion.svg", "image", 9100, 30), mkA("figures/loss_curve.svg", "image", 4100, 96), mkA("outputs/per_class.csv", "table", 18230, 14), mkA("research/results/20261112-r03-smooth01.md", "doc", 2100, 40), mkA("notebooks/explore.ipynb", "notebook", 48200, 400), mkA("paper/draft.pdf", "pdf", 212000, 900), mkA("outputs/report.html", "html", 6400, 60)] });
       }
       if (seg[2] === "raw") {
         const path = url.searchParams.get("path") ?? "";
+        if (badReadPath(path)) return fail(400, "bad_request", "path 不能为空或含控制字符");
         const head = { "content-type": "application/octet-stream", "x-content-type-options": "nosniff" };
         if (path.endsWith(".svg")) {
           const n = path.length * 7;
@@ -697,24 +957,37 @@ Bun.serve<{ title: string }, never>({
         if (path.endsWith(".ipynb")) return new Response(JSON.stringify({ metadata: { kernelspec: { language: "python" } }, cells: [{ cell_type: "markdown", source: ["# 探索：尾部类别的置信度"] }, { cell_type: "code", execution_count: 1, source: ["import pandas as pd\n", "df = pd.read_csv('outputs/per_class.csv')\n", "df.groupby('split').acc.mean()"], outputs: [{ output_type: "execute_result", data: { "text/plain": ["split\nhead    0.908\nmid     0.791\ntail    0.449\nName: acc, dtype: float64"] } }] }, { cell_type: "code", execution_count: 2, source: ["1/0"], outputs: [{ output_type: "error", ename: "ZeroDivisionError", evalue: "division by zero", traceback: ["ZeroDivisionError: division by zero"] }] }] }), { headers: head });
         return new Response("%PDF-1.4 demo", { headers: head });
       }
+      // 连不上的会话：研究记录、可信度、运行详情都取不到（同真实后端的 host_unreachable）。
+      if (seg[2] === "research" && s.state === "unreachable") return fail(502, "host_unreachable", `连不上 ${s.server_alias}`, "确认机器开着、地址和端口没变，再到“服务器”页测试一次。");
+      if (seg[2] === "research" && seg[3] === "trust") {
+        await sleep(s.id === "lc3n8p" ? 1600 : 900); // 服务器上要依次跑四条命令
+        if (s.plugin !== "research") return json({ available: false, reason: "工作目录里没有研究目录", rk_version: null, checked_at: new Date().toISOString(), check: null, review: null, cite: null, plan: null, failures: [] });
+        return json(trustOf(s));
+      }
       if (seg[2] === "research" && seg[3] === "run") {
         const rid = url.searchParams.get("run_id") ?? "";
+        if (!/^[A-Za-z0-9._-]{1,64}$/.test(rid)) return fail(400, "bad_request", "运行 ID 不合规");
         const live = rid.endsWith("r05-smooth01-s3");
         const log = Array.from({ length: 40 }, (_, i) => `[epoch ${String(i + 1).padStart(3, "0")}] loss=${(2.1 * Math.exp(-i / 14) + 0.42).toFixed(4)} acc=${(0.42 + 0.35 * (1 - Math.exp(-i / 10))).toFixed(4)} acc_tail=${(0.18 + 0.27 * (1 - Math.exp(-i / 12))).toFixed(4)}`).join("\n");
-        return json({ run_id: rid, meta: { run_id: rid, kind: "prereg", cmd: ["python", "train.py", "--config", "configs/smooth.yaml", "--seed", "3"], cwd: "/home/dev/work/longtail", host: "atlas", user: "dev", started_at: ago(26), git_commit: "9d04e77a1c", git_dirty: false, prereg: [{ path: "research/prereg/P-002-smoothing.md", commit: "9d04e77a1c" }], note: "ε=0.1 seed=3" }, log_tail: log + (live ? "\n[epoch 041] loss=0.5312 …" : "\n完成。"), metrics: live ? null : { acc: 0.772, acc_head: 0.908, acc_mid: 0.791, acc_tail: 0.449, loss: { final: 0.4312, best: 0.4188 }, epochs: 90 }, result_md: live ? null : "# r03 结果\n\nε = 0.1，单种子筛选。尾部准确率 **44.9**（基线 41.3）。\n\n判定：通过筛选阈值（+2.0），进入确认。" });
+        const prov = provenanceOf(rid);
+        return json({ run_id: rid, env: prov.env, outputs: prov.outputs, meta: { run_id: rid, kind: "prereg", cmd: ["python", "train.py", "--config", "configs/smooth.yaml", "--seed", "3"], cwd: "/home/dev/work/longtail", host: "atlas", user: "dev", started_at: ago(26), git_commit: "9d04e77a1c", git_dirty: false, prereg: [{ path: "research/prereg/P-002-smoothing.md", commit: "9d04e77a1c" }], note: "ε=0.1 seed=3", ...prov.meta }, log_tail: log + (live ? "\n[epoch 041] loss=0.5312 …" : "\n完成。"), metrics: live ? null : { acc: 0.772, acc_head: 0.908, acc_mid: 0.791, acc_tail: 0.449, loss: { final: 0.4312, best: 0.4188 }, epochs: 90 }, result_md: live ? null : "# r03 结果\n\nε = 0.1，单种子筛选。尾部准确率 **44.9**（基线 41.3）。\n\n判定：通过筛选阈值（+2.0），进入确认。" });
       }
       if (seg[2] === "research") {
         const present = s.plugin === "research";
         return json({
-          present, home: "research", loop: { on: present, started: present ? ago(240) : null, blocked: null },
+          present, home: Object.prototype.hasOwnProperty.call(RESEARCH_HOME, s.id) ? RESEARCH_HOME[s.id] : "research", loop: { on: present, started: present ? ago(240) : null, blocked: null },
           state_md: present ? STATE_MD : null, summary_md: present ? SUMMARY_MD : null, ideas_md: present ? IDEAS_MD : null, ledger_md: present ? LEDGER_MD : null,
-          overview_md: present ? SUMMARY_MD : null, lessons_md: present ? "# 经验\n\n- 混合精度下 `log(0)` 会出 NaN，统一加 eps。\n- 0 号卡常被占，默认用 1、3。" : null, log_tail: present ? "- 06:10 启动 r05（确认，seed 3）\n- 05:31 r04 结束，acc_tail 44.6" : null, prereg: present ? [{ name: "P-002-smoothing", title: "标签平滑对尾部类别的影响" }] : [], results: present ? [{ name: "20261112-r03-smooth01", title: "r03 结果" }] : [],
+          overview_md: present ? SUMMARY_MD : null, plan_md: present ? PLAN_MD : null,
+          // Q8：工作目录相对仓库根的前缀
+          repo_prefix: s.id === BIG_SESSION ? "vision/" : oldRk(s) ? null : "", lessons_md: present ? "# 经验\n\n- 混合精度下 `log(0)` 会出 NaN，统一加 eps。\n- 0 号卡常被占，默认用 1、3。" : null, log_tail: present ? "- 06:10 启动 r05（确认，seed 3）\n- 05:31 r04 结束，acc_tail 44.6" : null, prereg: present ? [{ name: "P-002-smoothing", title: "标签平滑对尾部类别的影响" }] : [], results: present ? [{ name: "20261112-r03-smooth01", title: "r03 结果" }] : [],
           runs: present
             ? [
+                { run_id: RID.r01, kind: "explore", state: "done", exit_code: 0, host: "atlas", started_at: ago(600), ended_at: ago(570), elapsed: "30m", note: "旧脚本：自己写了 env.json、outputs.json" },
                 { run_id: "20261112-r02-smooth02", kind: "explore", state: "failed", exit_code: 1, host: "atlas", started_at: ago(460), ended_at: ago(458), elapsed: "2m", note: "ε=0.2，显存不足" },
                 { run_id: "20261112-r03-smooth01", kind: "explore", state: "done", exit_code: 0, host: "atlas", started_at: ago(400), ended_at: ago(10), elapsed: "38m", note: "ε=0.1 筛选" },
                 { run_id: "20261112-r04-smooth01-s2", kind: "prereg", state: "done", exit_code: 0, host: "atlas", started_at: ago(95), ended_at: ago(54), elapsed: "41m", note: "ε=0.1 seed=2" },
                 { run_id: "20261112-r05-smooth01-s3", kind: "prereg", state: "running", exit_code: null, host: "atlas", started_at: ago(26), ended_at: null, elapsed: "26m", note: "ε=0.1 seed=3" },
+                ...(s.id === BIG_SESSION ? [{ run_id: SWEEP, kind: "explore", state: "done", exit_code: 0, host: "atlas", started_at: ago(300), ended_at: ago(40), elapsed: "4h20m", note: "全量扫描 5000 组配置" }] : []),
               ]
             : [],
         });

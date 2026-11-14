@@ -29,12 +29,19 @@ with os.scandir('.') as it:
 print(json.dumps(out))
 "#;
 
-fn cd_workdir(workdir: &str) -> String {
+pub(crate) fn cd_workdir(workdir: &str) -> String {
     format!("cd {} 2>/dev/null || {{ echo __OP_NOWD__; exit 0; }}\n", quote_path(workdir))
 }
 
 fn nowd(workdir: &str) -> Error {
     Error::not_found(format!("工作目录 {workdir} 在服务器上不存在"))
+}
+
+fn validate_read_path(path: &str) -> Result<&str> {
+    if path.is_empty() || path.chars().any(|c| c <= '\u{001f}' || ('\u{007f}'..='\u{009f}').contains(&c)) {
+        return Err(Error::bad_request("path 不能为空或含控制字符"));
+    }
+    Ok(path)
 }
 
 /// 目录在前、按名排序，最多 2000 项。
@@ -123,7 +130,7 @@ fn cut_utf8(s: &str, max: usize) -> &str {
 }
 
 impl Core {
-    async fn ws_ctx(&self, id: &str) -> Result<(Session, Server)> {
+    pub(crate) async fn ws_ctx(&self, id: &str) -> Result<(Session, Server)> {
         let rec = self
             .store
             .sessions()?
@@ -136,7 +143,7 @@ impl Core {
 
     pub async fn files(&self, id: &str, path: Option<&str>) -> Result<DirListing> {
         let (s, sv) = self.ws_ctx(id).await?;
-        let p = path.map(str::trim).filter(|p| !p.is_empty()).unwrap_or(".");
+        let p = validate_read_path(path.unwrap_or("."))?;
         let script = format!(
             "{cd}cd {p} 2>/dev/null || {{ echo __OP_NODIR__; exit 0; }}\n\
              printf '__OP_PWD__\\t%s\\n' \"$(pwd)\"\n\
@@ -172,10 +179,7 @@ impl Core {
 
     /// 读服务器上的文件：返回 (绝对路径, 大小, 最多 `limit` 字节)。`max_size` 有值时超过就报 bad_request。
     async fn read_remote(&self, id: &str, path: &str, limit: usize, max_size: Option<u64>) -> Result<(String, u64, Vec<u8>)> {
-        let path = path.trim();
-        if path.is_empty() {
-            return Err(Error::bad_request("缺少 path"));
-        }
+        let path = validate_read_path(path)?;
         let (s, sv) = self.ws_ctx(id).await?;
         let too_big = match max_size {
             Some(m) => format!("if [ \"${{sz:-0}}\" -gt {m} ] 2>/dev/null; then printf '__OP_TOOBIG__\\t%s\\n' \"$sz\"; exit 0; fi\n"),
@@ -235,7 +239,7 @@ impl Core {
     pub async fn raw(&self, id: &str, path: &str) -> Result<Vec<u8>> {
         let (_, size, content) = self.read_remote(id, path, MAX_RAW as usize + 1, Some(MAX_RAW)).await?;
         if content.len() as u64 > MAX_RAW || size > MAX_RAW {
-            return Err(Error::bad_request(format!("文件 {} 超过上限 32 MB", path.trim())));
+            return Err(Error::bad_request(format!("文件 {path} 超过上限 32 MB")));
         }
         Ok(content)
     }
@@ -271,7 +275,7 @@ impl Core {
 
     pub async fn git_diff(&self, id: &str, path: Option<&str>) -> Result<GitDiff> {
         let (s, sv) = self.ws_ctx(id).await?;
-        let path = path.map(str::trim).filter(|p| !p.is_empty());
+        let path = path.map(validate_read_path).transpose()?;
         let diff_cmd = match path {
             Some(p) => format!(
                 "p={p}\nif git ls-files --error-unmatch -- \"$p\" >/dev/null 2>&1; then git diff --no-color --no-ext-diff \"$base\" -- \"$p\"; \
@@ -308,12 +312,13 @@ impl Core {
         let m = format!("__OPR_{}__", short_id());
         let script = format!(
             "M={m}\n{cd}{home}\
+             if prefix=$(git rev-parse --show-prefix 2>/dev/null); then printf '%s repo_prefix\\t%s\\n' \"$M\" \"$prefix\"; fi\n\
              printf '%s home\\t%s\\n' \"$M\" \"$rel\"\n\
              [ -f \"$h/PROJECT.md\" ] || {{ echo \"$M absent\"; exit 0; }}\n\
              echo \"$M present\"\n\
              if [ -f \"$h/.loop/active\" ]; then printf '%s loop\\t%s\\n' \"$M\" \"$(sed -n 's/^started: *//p' \"$h/.loop/active\" | head -n 1)\"; fi\n\
              if [ -s \"$h/.loop/blocked\" ]; then printf '%s blocked\\t%s\\n' \"$M\" \"$(head -c 2000 \"$h/.loop/blocked\" | tr '\\n\\t' '  ')\"; fi\n\
-             for f in STATE SUMMARY IDEAS LEDGER OVERVIEW LESSONS; do if [ -f \"$h/$f.md\" ]; then echo \"$M file $f\"; head -c 262144 \"$h/$f.md\"; echo; fi; done\n\
+             for f in STATE SUMMARY IDEAS LEDGER OVERVIEW LESSONS PLAN; do if [ -f \"$h/$f.md\" ]; then echo \"$M file $f\"; head -c 262144 \"$h/$f.md\"; echo; fi; done\n\
              if [ -f \"$h/LOG.md\" ]; then echo \"$M logtail\"; tail -n 120 \"$h/LOG.md\"; echo; fi\n\
              for k in prereg results; do for f in \"$h/$k\"/*.md; do\n\
                [ -f \"$f\" ] || continue; n=$(basename \"$f\"); [ \"$n\" = TEMPLATE.md ] && continue\n\
@@ -357,6 +362,7 @@ impl Core {
             "M={m}\n{cd}{home}\
              d=\"$h/runs/\"{rid}\n\
              [ -f \"$d/meta.json\" ] || {{ echo \"$M nometa\"; exit 0; }}\n\
+             {extra}\
              echo \"$M meta\"; head -c 1048576 \"$d/meta.json\"; echo\n\
              echo \"$M log\"; if [ -f \"$d/log.txt\" ]; then tail -n {n} \"$d/log.txt\"; fi; echo\n\
              if [ -f \"$d/metrics.json\" ]; then echo \"$M metrics\"; head -c 65537 \"$d/metrics.json\"; echo; fi\n\
@@ -366,6 +372,7 @@ impl Core {
             cd = cd_workdir(&s.workdir),
             home = RESOLVE_HOME,
             rid = quote(run_id),
+            extra = bounded_run_objects(),
         );
         let out = self.exec(&sv, &script, OP_TIMEOUT).await?;
         let text = out.text();
@@ -382,7 +389,15 @@ impl Core {
             .map_err(|e| Error::bad_request(format!("runs/{run_id}/meta.json 不是合法 JSON：{e}")))?;
         let metrics =
             get("metrics").filter(|t| t.len() <= 64 * 1024).and_then(|t| serde_json::from_str::<serde_json::Value>(t.trim()).ok());
-        Ok(RunDetail { run_id: run_id.to_string(), meta, log_tail: get("log").unwrap_or_default(), metrics, result_md: get("result") })
+        Ok(RunDetail {
+            run_id: run_id.to_string(),
+            meta,
+            log_tail: get("log").unwrap_or_default(),
+            metrics,
+            result_md: get("result"),
+            env: bounded_remote_object(&out.stdout, &m, "env", 256 * 1024),
+            outputs: bounded_remote_object(&out.stdout, &m, "outputs", 1024 * 1024),
+        })
     }
 
     /// 产物（v1.1）：workdir 下递归（深度 ≤ 8）找图、PDF、表格、notebook、html、报告，按修改时间倒序。
@@ -390,14 +405,15 @@ impl Core {
         let limit = limit.unwrap_or(300).clamp(1, 1000) as usize;
         let (s, sv) = self.ws_ctx(id).await?;
         let script = format!(
-            "{cd}echo __OP_ART__\n\
-             if {py}; then python3 -c {code}\n\
+            "{cd}{home}echo __OP_ART__\n\
+             if {py}; then python3 -c {code} \"$h\" {limit}\n\
              elif stat -c %s . >/dev/null 2>&1; then find . -mindepth 1 -maxdepth {d} {expr} -exec stat -c '%s|%Y|%n' {{}} + 2>/dev/null | head -n {cap}\n\
              else find . -mindepth 1 -maxdepth {d} {expr} -exec stat -f '%z|%m|%N' {{}} + 2>/dev/null | head -n {cap}\n\
              fi\n",
             cd = cd_workdir(&s.workdir),
             py = python_test(),
             code = quote(&artifact_py()),
+            home = RESOLVE_HOME,
             d = ART_DEPTH,
             expr = find_expr(),
             cap = ART_SCAN_CAP,
@@ -410,13 +426,20 @@ impl Core {
         let Some((_, body)) = text.split_once("__OP_ART__\n") else {
             return Err(Error::new(Code::SshFailed, format!("查找产物失败：{}", out.err_line())));
         };
-        Ok(collect_artifacts(body, limit))
+        let (listing, runs) = body.split_once("__OP_RUN__\n").unwrap_or((body, ""));
+        let mut artifacts = collect_artifacts(listing, limit);
+        if let Ok(runs) = serde_json::from_str::<std::collections::BTreeMap<String, ArtifactRun>>(runs) {
+            for item in &mut artifacts.items {
+                item.run = runs.get(&item.path).cloned();
+            }
+        }
+        Ok(artifacts)
     }
 }
 
 /// 研究目录：默认 `research`；项目里有 `.claude/research-home` 时以它的第一行为准（与 research 插件一致）。
 /// 执行前已经 cd 到 workdir；结果在 `$rel`（原样）与 `$h`（绝对路径）。
-const RESOLVE_HOME: &str = "rel=research\n\
+pub(crate) const RESOLVE_HOME: &str = "rel=research\n\
 if [ -f .claude/research-home ]; then r=$(head -n 1 .claude/research-home | tr -d '\\r'); [ -n \"$r\" ] && rel=$r; fi\n\
 case \"$rel\" in /*) h=$rel ;; *) h=\"$PWD/$rel\" ;; esac\n";
 
@@ -425,7 +448,7 @@ pub fn valid_run_id(r: &str) -> bool {
 }
 
 /// 远程脚本里“能不能用 python3”的判断。`BUNSEN_REMOTE_NO_PYTHON=1` 强制走 find/stat 退路（测试与排障用）。
-fn python_test() -> &'static str {
+pub(crate) fn python_test() -> &'static str {
     if std::env::var("BUNSEN_REMOTE_NO_PYTHON").ok().as_deref() == Some("1") {
         "false"
     } else {
@@ -453,30 +476,7 @@ fn find_expr() -> String {
     format!("\\( -type d \\( {} \\) -prune \\) -o \\( -type f \\( {} \\)", skip.join(" -o "), exts.join(" -o ")) + " \\)"
 }
 
-const ARTIFACT_PY: &str = r#"import os
-EXTS = {__EXTS__}
-SKIP = {__SKIP__}
-n = 0
-for root, dirs, files in os.walk('.'):
-    rel = os.path.relpath(root, '.')
-    depth = 0 if rel == '.' else rel.count(os.sep) + 1
-    dirs[:] = [] if depth + 1 >= __DEPTH__ else [d for d in dirs if not d.startswith('.') and d not in SKIP]
-    for f in files:
-        if '.' not in f or '\n' in f:
-            continue
-        if f.rsplit('.', 1)[1].lower() not in EXTS:
-            continue
-        p = os.path.join(root, f)
-        try:
-            st = os.stat(p)
-        except OSError:
-            continue
-        name = p.encode('utf-8', 'surrogateescape').decode('utf-8', 'replace')
-        print('%d|%d|%s' % (st.st_size, int(st.st_mtime), name))
-        n += 1
-        if n >= __CAP__:
-            raise SystemExit(0)
-"#;
+const ARTIFACT_PY: &str = include_str!("scripts/artifacts.py");
 
 fn artifact_py() -> String {
     let exts: Vec<String> = ART_KINDS.iter().flat_map(|(_, e)| e.iter()).map(|e| format!("'{e}'")).collect();
@@ -486,6 +486,7 @@ fn artifact_py() -> String {
         .replace("__SKIP__", &skip.join(", "))
         .replace("__DEPTH__", &ART_DEPTH.to_string())
         .replace("__CAP__", &ART_SCAN_CAP.to_string())
+        .replace("__HASH_BUDGET__", &(512_u64 * 1024 * 1024).to_string())
 }
 
 pub fn artifact_kind(path: &str) -> Option<&'static str> {
@@ -518,7 +519,7 @@ pub fn collect_artifacts(body: &str, limit: usize) -> ArtifactList {
         let name = path.rsplit('/').next().unwrap_or(&path).to_string();
         items.push((
             mtime,
-            Artifact { name, kind: kind.into(), size: f[0].trim().parse().unwrap_or(0), mtime: rfc3339_from_unix(mtime), path },
+            Artifact { run: None, name, kind: kind.into(), size: f[0].trim().parse().unwrap_or(0), mtime: rfc3339_from_unix(mtime), path },
         ));
     }
     items.sort_by(|a, b| b.0.cmp(&a.0).then_with(|| a.1.path.cmp(&b.1.path)));
@@ -550,6 +551,7 @@ pub fn parse_sections(text: &str, m: &str) -> Vec<(String, String)> {
 /// 研究目录不存在时的返回值：`present=false`，其余为 null / 空。
 pub fn empty_panel(home: String) -> ResearchPanel {
     ResearchPanel {
+        repo_prefix: None,
         present: false,
         home,
         loop_: LoopInfo { on: false, started: None, blocked: None },
@@ -557,6 +559,7 @@ pub fn empty_panel(home: String) -> ResearchPanel {
         summary_md: None,
         ideas_md: None,
         ledger_md: None,
+        plan_md: None,
         runs: vec![],
         overview_md: None,
         lessons_md: None,
@@ -575,6 +578,7 @@ pub fn parse_research(text: &str, m: &str) -> ResearchPanel {
         let (key, arg) = h.split_once(['\t', ' ']).unwrap_or((h.as_str(), ""));
         match key {
             "home" => p.home = arg.to_string(),
+            "repo_prefix" => p.repo_prefix = Some(arg.to_string()),
             "present" => p.present = true,
             "loop" => {
                 p.loop_.on = true;
@@ -582,6 +586,7 @@ pub fn parse_research(text: &str, m: &str) -> ResearchPanel {
             }
             "blocked" => p.loop_.blocked = Some(arg.trim().to_string()).filter(|v| !v.is_empty()),
             "file" => match arg {
+                "PLAN" => p.plan_md = Some(body),
                 "STATE" => p.state_md = Some(body),
                 "SUMMARY" => p.summary_md = Some(body),
                 "IDEAS" => p.ideas_md = Some(body),
@@ -900,3 +905,25 @@ mod tests {
         assert_eq!(v, [("a".to_string(), "x\n".to_string()), ("b".to_string(), String::new()), ("end".to_string(), String::new())]);
     }
 }
+
+fn bounded_run_objects() -> String {
+    [("env", 256 * 1024), ("outputs", 1024 * 1024)].into_iter().map(|(name, cap)| format!(
+        "if [ -f \"$d/{name}.json\" ]; then sz=$(stat -c %s \"$d/{name}.json\" 2>/dev/null || stat -f %z \"$d/{name}.json\" 2>/dev/null || echo {}); if [ \"$sz\" -le {cap} ] 2>/dev/null; then echo \"$M {name}\"; head -c {} \"$d/{name}.json\"; echo; fi; fi\n", cap + 1, cap + 1
+    )).collect()
+}
+
+fn bounded_remote_object(raw: &[u8], marker: &str, name: &str, cap: usize) -> Option<serde_json::Value> {
+    let start = format!("{marker} {name}\n");
+    let i = raw.windows(start.len()).position(|w| w == start.as_bytes())? + start.len();
+    let rest = &raw[i..];
+    let end = format!("\n{marker} ");
+    let n = rest.windows(end.len()).position(|w| w == end.as_bytes())?;
+    if n > cap {
+        return None;
+    }
+    serde_json::from_slice::<serde_json::Value>(&rest[..n]).ok().filter(serde_json::Value::is_object)
+}
+
+#[cfg(test)]
+#[path = "artifact_quality_tests.rs"]
+mod quality_tests;

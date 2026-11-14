@@ -5,6 +5,8 @@ use crate::model::*;
 use crate::shell::{quote, quote_path};
 use crate::util::{now_rfc3339, rfc3339_from_unix, short_id, unix_now};
 use crate::Core;
+#[path = "project_quality.rs"]
+mod quality;
 use serde_json::Value;
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
@@ -60,6 +62,26 @@ where
     F: FnOnce(tokio::process::ChildStdout) -> Fut,
     Fut: std::future::Future<Output = Result<T>>,
 {
+    git_exchange(dir, args, ssh, input.is_some(), |stdin, stdout| async move {
+        let write = async move {
+            if let (Some(mut stdin), Some(input)) = (stdin, input) {
+                stdin.write_all(&input).await?;
+                stdin.shutdown().await?;
+            }
+            Ok::<_, Error>(())
+        };
+        let (_, value) = tokio::try_join!(write, read(stdout))?;
+        Ok(value)
+    })
+    .await
+}
+
+// 交互式 batch 仍走同一个执行器、120 秒超时和进程组清理；可在读完 review 后决定是否请求结论正文。
+async fn git_exchange<T, F, Fut>(dir: &Path, args: &[&str], ssh: Option<&str>, piped: bool, exchange: F) -> Result<(T, Output)>
+where
+    F: FnOnce(Option<tokio::process::ChildStdin>, tokio::process::ChildStdout) -> Fut,
+    Fut: std::future::Future<Output = Result<T>>,
+{
     let mut cmd = Command::new("git");
     cmd.current_dir(dir)
         .args(args)
@@ -71,7 +93,7 @@ where
         .env_remove("GIT_DIR")
         .env_remove("GIT_WORK_TREE")
         .env_remove("GIT_INDEX_FILE")
-        .stdin(if input.is_some() { Stdio::piped() } else { Stdio::null() })
+        .stdin(if piped { Stdio::piped() } else { Stdio::null() })
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .kill_on_drop(true);
@@ -86,19 +108,12 @@ where
     let stdout = child.stdout.take().unwrap();
     let stderr = child.stderr.take().unwrap();
     let result = tokio::time::timeout(GIT_TIMEOUT, async {
-        let write = async move {
-            if let (Some(mut stdin), Some(input)) = (stdin, input) {
-                stdin.write_all(&input).await?;
-                stdin.shutdown().await?;
-            }
-            Ok::<_, Error>(())
-        };
         let wait = async { child.wait().await.map_err(Error::from) };
-        tokio::try_join!(write, read(stdout), bounded_output(stderr), wait)
+        tokio::try_join!(exchange(stdin, stdout), bounded_output(stderr), wait)
     })
     .await;
     match result {
-        Ok(Ok((_, value, stderr, status))) => {
+        Ok(Ok((value, stderr, status))) => {
             group.disarm();
             Ok((value, Output { status, stdout: vec![], stderr }))
         }
@@ -912,7 +927,6 @@ impl Drop for SkippedPaths {
 async fn read_objects(path: &Path, home: &str, branches: &[Branch]) -> Result<Objects> {
     let mut trees = BTreeMap::new();
     let mut hashes = BTreeMap::<String, usize>::new();
-    let mut total = 0;
     let mut skipped = SkippedPaths::default();
     for branch in branches {
         let tree = git_read(path, &["ls-tree", "-r", "-l", "-z", "--full-tree", &branch.head, "--", home], None, |stdout| async {
@@ -936,7 +950,8 @@ async fn read_objects(path: &Path, home: &str, branches: &[Branch]) -> Result<Ob
                 };
                 let state = file.strip_prefix(&repo_path(home, "state/"));
                 let run = file.strip_prefix(&repo_path(home, "runs/")).and_then(|s| s.split_once('/'));
-                let body = file == repo_path(home, "SUMMARY.md")
+                let body = (branch.name.starts_with("research/") && quality::needed(home, file))
+                    || file == repo_path(home, "SUMMARY.md")
                     || state.is_some_and(|s| s.ends_with(".md") && s != "TEMPLATE.md" && !s.contains('/'))
                     || run.is_some_and(|(_, s)| s == "meta.json" || s == "exit_code");
                 let metrics = run.is_some_and(|(_, s)| s == "metrics.json");
@@ -955,12 +970,11 @@ async fn read_objects(path: &Path, home: &str, branches: &[Branch]) -> Result<Ob
                     continue;
                 }
                 let size = fields[3].parse::<usize>().map_err(|_| Error::internal("git 对象长度不正确"))?;
-                if tree.len() >= MAX_PATHS || (body && (size > MAX_BLOB || (!hashes.contains_key(fields[2]) && total + size > MAX_TOTAL))) {
+                if tree.len() >= MAX_PATHS {
                     skipped.insert(file).await?;
                     continue;
                 }
-                if body && !hashes.contains_key(fields[2]) {
-                    total += size;
+                if body {
                     hashes.insert(fields[2].to_string(), size);
                 }
                 tree.insert(file.to_string(), fields[2].to_string());
@@ -972,30 +986,110 @@ async fn read_objects(path: &Path, home: &str, branches: &[Branch]) -> Result<Ob
     }
     let mut blobs = BTreeMap::new();
     if !hashes.is_empty() {
-        let input = hashes.keys().map(|s| format!("{s}\n")).collect::<String>().into_bytes();
-        blobs = git_read(path, &["cat-file", "--batch"], Some(input), |stdout| async {
-            let mut reader = BufReader::new(stdout);
-            let mut blobs = BTreeMap::new();
-            for (hash, expected) in hashes {
-                let header = record(&mut reader, b'\n', 256).await?;
-                let header = String::from_utf8_lossy(&header);
-                let fields: Vec<_> = header.split_whitespace().collect();
-                let size = fields.get(2).and_then(|s| s.parse::<usize>().ok()).ok_or_else(|| Error::internal("git 对象长度不正确"))?;
-                if fields.first() != Some(&hash.as_str()) || fields.get(1) != Some(&"blob") || size != expected || size > MAX_BLOB {
-                    return Err(Error::internal("git 对象头与 tree 不一致"));
+        let (loaded, out) = git_exchange(path, &["cat-file", "--batch"], None, true, |stdin, stdout| async {
+            let mut batch = ObjectBatch { input: stdin.unwrap(), reader: BufReader::new(stdout), blobs: BTreeMap::new(), total: 0 };
+            let version_path = repo_path(home, "tools/rk.py");
+            let mut enabled = BTreeSet::new();
+            // 先读取版本，再读取旧视图正文和质量记录，最后只请求没核过的结论正文。
+            for (branch, tree) in &mut trees {
+                if !branch.starts_with("research/") {
+                    continue;
                 }
-                let mut data = vec![0; size];
-                reader.read_exact(&mut data).await?;
-                if reader.read_u8().await? != b'\n' {
-                    return Err(Error::internal("git 对象内容不完整"));
+                if let Some(hash) = tree.get(&version_path).cloned() {
+                    if batch.load(&hash, hashes[&hash]).await? {
+                        if blob_text(tree, &batch.blobs, &version_path)
+                            .and_then(crate::research_quality::rk_version)
+                            .as_deref()
+                            .is_some_and(crate::research_quality::quality_version)
+                        {
+                            enabled.insert(branch.clone());
+                        }
+                    } else {
+                        skipped.insert(&version_path).await?;
+                        tree.remove(&version_path);
+                    }
                 }
-                blobs.insert(hash, data);
             }
-            Ok(blobs)
+            for (branch, tree) in &mut trees {
+                let paths: Vec<_> = tree.keys().cloned().collect();
+                for file in paths {
+                    // metrics 只看存在性；即使与某个未读取的质量记录共用 blob，也不能请求正文。
+                    let metrics = file
+                        .strip_prefix(&repo_path(home, "runs/"))
+                        .and_then(|s| s.split_once('/'))
+                        .is_some_and(|(_, name)| name == "metrics.json");
+                    if metrics {
+                        continue;
+                    }
+                    let hash = &tree[&file];
+                    let Some(&size) = hashes.get(hash) else { continue };
+                    let quality_only = quality::needed(home, &file) && file != repo_path(home, "SUMMARY.md");
+                    if file == version_path || (quality_only && (!enabled.contains(branch) || quality::conclusion(home, &file))) {
+                        continue;
+                    }
+                    if !batch.load(hash, size).await? {
+                        skipped.insert(&file).await?;
+                        tree.remove(&file);
+                    }
+                }
+            }
+            for (branch, tree) in &mut trees {
+                if !enabled.contains(branch) {
+                    continue;
+                }
+                let reviewed = quality::reviewed_paths(home, tree, &batch.blobs);
+                let paths: Vec<_> = tree.keys().filter(|f| quality::conclusion(home, f) && !reviewed.contains(*f)).cloned().collect();
+                for file in paths {
+                    let hash = &tree[&file];
+                    if !batch.load(hash, hashes[hash]).await? {
+                        skipped.insert(&file).await?;
+                        tree.remove(&file);
+                    }
+                }
+            }
+            batch.input.shutdown().await?;
+            Ok(batch.blobs)
         })
         .await?;
+        if !out.status.success() {
+            return Err(git_error(&out));
+        }
+        blobs = loaded;
     }
     Ok((trees, blobs, skipped.finish().await?))
+}
+
+struct ObjectBatch {
+    input: tokio::process::ChildStdin,
+    reader: BufReader<tokio::process::ChildStdout>,
+    blobs: BTreeMap<String, Vec<u8>>,
+    total: usize,
+}
+impl ObjectBatch {
+    async fn load(&mut self, hash: &str, expected: usize) -> Result<bool> {
+        if self.blobs.contains_key(hash) {
+            return Ok(true);
+        }
+        if expected > MAX_BLOB || self.total + expected > MAX_TOTAL {
+            return Ok(false);
+        }
+        self.input.write_all(format!("{hash}\n").as_bytes()).await?;
+        let header = record(&mut self.reader, b'\n', 256).await?;
+        let header = String::from_utf8_lossy(&header);
+        let fields: Vec<_> = header.split_whitespace().collect();
+        let size = fields.get(2).and_then(|s| s.parse::<usize>().ok()).ok_or_else(|| Error::internal("git 对象长度不正确"))?;
+        if fields.first() != Some(&hash) || fields.get(1) != Some(&"blob") || size != expected {
+            return Err(Error::internal("git 对象头与 tree 不一致"));
+        }
+        let mut data = vec![0; size];
+        self.reader.read_exact(&mut data).await?;
+        if self.reader.read_u8().await? != b'\n' {
+            return Err(Error::internal("git 对象内容不完整"));
+        }
+        self.total += size;
+        self.blobs.insert(hash.to_string(), data);
+        Ok(true)
+    }
 }
 
 async fn derive_view(path: &Path, mut project: Project, members: Vec<ProjectMember>) -> Result<ProjectView> {
@@ -1062,7 +1156,8 @@ async fn derive_view(path: &Path, mut project: Project, members: Vec<ProjectMemb
     }
     machines.sort_by(|a, b| a.code.cmp(&b.code));
     let (trees, blobs, skipped) = read_objects(path, &project.home, &branches).await?;
-    let (lines, runs, decisions) = derive_records(&project, &trees, &blobs);
+    let (mut lines, runs, decisions) = derive_records(&project, &trees, &blobs);
+    let trust = quality::derive(&project, &trees, &blobs, &mut lines);
     let mut warnings = Vec::new();
     if let Some(error) = &project.fetch_error {
         warnings.push(match project.fetched_at.as_deref() {
@@ -1086,10 +1181,14 @@ async fn derive_view(path: &Path, mut project: Project, members: Vec<ProjectMemb
     for member in members.iter().filter(|s| s.machine.is_none()) {
         warnings.push(format!("会话 {} 还没有机器代号：仓库里有研究目录后在那里执行 rk sync --setup", member.title));
     }
+    if let Some(trust) = &trust {
+        quality::warnings(trust, &mut warnings);
+    }
     if skipped > 0 {
         warnings.push(format!("汇合点里有 {skipped} 个文件过大或过多，没有读入视图"));
     }
     Ok(ProjectView {
+        trust,
         project,
         research_head,
         machines,
@@ -1258,6 +1357,8 @@ fn parse_line(line: &str, source: &str, text: &str) -> ProjectLine {
         .map(str::to_string)
         .collect();
     ProjectLine {
+        open_fails: None,
+        unreviewed: None,
         line: line.into(),
         holder: field("holder"),
         token: field("token").and_then(|v| v.parse().ok()).unwrap_or(0),

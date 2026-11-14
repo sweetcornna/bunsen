@@ -11,6 +11,7 @@ pub mod model;
 pub mod plugins;
 pub mod probe;
 pub mod projects;
+mod research_quality;
 pub mod sessions;
 pub mod shell;
 pub mod ssh;

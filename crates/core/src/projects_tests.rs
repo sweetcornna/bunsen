@@ -576,7 +576,7 @@ async fn real_rk_setup_and_member_sync() {
     assert_eq!(sync.view.machines[0].ahead, 0);
     assert_eq!(sync.view.machines[0].behind, 0);
     assert!(g(&hub, &["show", "research/demo:research/record.md"]).await.contains("同步一次"));
-    // rk 退出 1 时保留 JSON 和冲突文件；缺文件与退出 2 时 result 为空。
+    // rk 退出 1 时保留 JSON 和冲突文件；缺文件 result 为空，参数错误的 JSON 也保留。
     let stub = f.dir("stub");
     write(
         &stub,
@@ -603,7 +603,8 @@ async fn real_rk_setup_and_member_sync() {
     assert!(sync.members[2].result.is_none());
     assert!(!sync.members[3].ok);
     assert!(sync.members[3].detail.contains("研究分支"));
-    assert!(sync.members[3].result.is_none());
+    assert_eq!(sync.members[3].result.as_ref().unwrap()["ok"], false);
+    assert!(sync.members[3].result.as_ref().unwrap()["error"].as_str().unwrap().contains("研究分支"));
     // 部署时 JSON ok=false 仍是成功接入，并记机器代号。
     write(
         &repo,
@@ -1863,4 +1864,220 @@ fn r5_hook_warning_survives_member_and_setup_details() {
     }))
     .unwrap();
     assert!(detail.starts_with("已接入研究项目；") && detail.contains("hook"));
+}
+
+#[tokio::test]
+async fn quality_mirror_reviews_closures_lines_citations_and_old_rk() {
+    let f = Fixture::new();
+    let hub = f.hub().await;
+    let repo = f.seed(&hub).await;
+    write(&repo, "research/tools/rk.py", "RK_VERSION = '0.6.0'\n");
+    for name in ["SUMMARY.md", "OVERVIEW.md", "LEDGER.md", "results/TEMPLATE.md", "strategy/TEMPLATE.md"] {
+        write(&repo, &format!("research/{name}"), &crate::plugins::research_template(name).unwrap());
+    }
+    write(&repo, "research/results/blank.md", &crate::plugins::research_template("results/TEMPLATE.md").unwrap());
+    write(&repo, "research/strategy/blank.md", "# 标题\n<!-- 注释 -->\n- <占位>\n1. <占位>\n| 列一 | 列二 |\n|---|---|\n| <占位> | |\n");
+    write(&repo, "research/strategy/real.md", "# 策略\n这是实际内容\n");
+    write(&repo, "research/LEDGER.md", "# 账本\n已写结论\n");
+    for (id, line) in [("r1", "alpha"), ("r2", "beta"), ("r3", "alpha")] {
+        write(&repo, &format!("research/results/{id}.md"), &format!("# {id}\n精确数值 42\n"));
+        write(&repo, &format!("research/runs/{id}/meta.json"), &json!({"run_id":id,"line":line,"exit_code":0}).to_string());
+        write(&repo, &format!("research/state/{line}.md"), "---\ntoken: 1\nholder: mac\n---\n**阶段**：验证\n");
+    }
+    let r1_hash = g(&repo, &["hash-object", "research/results/r1.md"]).await.trim().to_string();
+    let ledger_hash = g(&repo, &["hash-object", "research/LEDGER.md"]).await.trim().to_string();
+    let record = json!({"kind":"review","review_id":"review-1","files":[
+        {"path":"results/r1.md","sha256":"deliberately-not-used","git_blob":r1_hash},
+        {"path":"LEDGER.md","sha256":"ignored","git_blob":ledger_hash}],"items":[
+        {"id":"1","file":"results/r1.md","verdict":"fail"},
+        {"id":"2","file":"results/r1.md","verdict":"fail"},
+        {"id":"3","file":"results/r1.md","verdict":"fail"},
+        {"id":"4","file":"results/r2.md","verdict":"fail"},
+        {"id":"5","file":"SUMMARY.md","verdict":"fail"}],"recorded_at":"2026-11-13T00:00:00Z"});
+    write(&repo, "research/audits/review-1.json", &record.to_string());
+    write(&repo, "research/audits/resolve-1.json", r#"{"kind":"resolve","item":"review-1#1"}"#);
+    write(
+        &repo,
+        "research/audits/review-2.json",
+        r#"{"kind":"review","files":[],"items":[{"id":"1","file":"results/r1.md","verdict":"pass","resolves":"review-1#2"},{"id":"2","verdict":"warn","resolves":"review-1#3"}]}"#,
+    );
+    // 旧推断审计、plan 记录、嵌套文件不能参与 fail/核对计数。
+    write(&repo, "research/audits/old.json", &record.to_string());
+    write(&repo, "research/audits/review-wrong-kind.json", r#"{"kind":"plan","items":[{"id":"1","file":"SUMMARY.md","verdict":"fail"}]}"#);
+    write(&repo, "research/results/nested/ignored.md", "不能计入\n");
+    let source = |id: &str, status: &str, retracted: bool, at: &str| {
+        json!({"id":id,"status":status,"retracted":retracted,"checked_at":at}).to_string()
+    };
+    for (file, id, status, retracted, at) in [
+        ("found@a", "doi:found", "not_found", false, "2026-11-13T10:00:00+08:00"),
+        ("found@b", "doi:found", "ok", false, "2026-11-13T03:00:00Z"),
+        ("missing@a", "doi:missing", "not_found", false, "2026-11-13T03:00:00.1Z"),
+        ("missing@b", "doi:missing", "not_found", false, "2026-11-13T03:00:00.2Z"),
+        ("retracted@a", "doi:retracted", "ok", true, "2026-11-13T03:00:00Z"),
+        ("retracted@b", "doi:retracted", "ok", true, "2026-11-13T03:00:00Z"),
+    ] {
+        write(&repo, &format!("research/sources/{file}.json"), &source(id, status, retracted, at));
+    }
+    write(&repo, "research/sources/too-big.json", &" ".repeat(MAX_BLOB + 1));
+    write(&repo, "research/audits/review-too-big.json", &" ".repeat(MAX_BLOB + 1));
+    write(&repo, "research/results/too-big.md", &"x".repeat(MAX_BLOB + 1));
+    commit(&repo, "质量记录", false).await;
+    g(&repo, &["push", "-q", "origin", "HEAD"]).await;
+    g(&repo, &["checkout", "-q", "-b", "sync/new"]).await;
+    write(&repo, "research/results/pending.md", "还未并入\n");
+    write(&repo, "research/audits/resolve-unmerged.json", r#"{"kind":"resolve","item":"review-1#3"}"#);
+    write(&repo, "research/runs/r3/meta.json", r#"{"run_id":"r3","line":"beta","exit_code":0}"#);
+    write(&repo, "research/sources/missing@c.json", &source("doi:missing", "ok", false, "2026-11-14T00:00:00Z"));
+    commit(&repo, "未并入的记录", false).await;
+    g(&repo, &["push", "-q", "origin", "HEAD"]).await;
+    let p = f.project(&hub).await;
+    let v = f.core.project_view(&p.id, false).await.unwrap();
+    assert_eq!(v.trust, Some(ProjectTrust { open_fails: 3, unreviewed: 3, unresolved_citations: 1, retracted_citations: 1 }));
+    let alpha = v.lines.iter().find(|l| l.line == "alpha").unwrap();
+    let beta = v.lines.iter().find(|l| l.line == "beta").unwrap();
+    assert_eq!((alpha.open_fails, alpha.unreviewed), (Some(1), Some(1)));
+    assert_eq!((beta.open_fails, beta.unreviewed), (Some(1), Some(1)));
+    assert_eq!(
+        v.warnings,
+        [
+            "研究分支上有 3 个未关闭的核对问题、3 个结论文件还没核过",
+            "研究分支上有 1 条引用解析不到",
+            "研究分支上有 1 篇被引文献已撤稿",
+            "汇合点里有 3 个文件过大或过多，没有读入视图"
+        ]
+    );
+    g(&repo, &["checkout", "-q", "research/demo"]).await;
+    write(&repo, "research/results/r1.md", "# r1\n精确数值 43\n");
+    commit(&repo, "核过之后又改了数字", false).await;
+    g(&repo, &["push", "-q", "origin", "HEAD"]).await;
+    let v = f.core.project_view(&p.id, true).await.unwrap();
+    assert_eq!(v.trust.unwrap().unreviewed, 4, "必须比较当前 blob，不能只看曾经有 review");
+    write(&repo, "research/tools/rk.py", "RK_VERSION = '0.5.9'\n");
+    commit(&repo, "旧版工具", false).await;
+    g(&repo, &["push", "-q", "origin", "HEAD"]).await;
+    let v = f.core.project_view(&p.id, true).await.unwrap();
+    assert!(v.trust.is_none());
+    assert!(!v.lines.is_empty(), "旧版 rk 仍须保留研究线，避免 all() 空真");
+    assert!(v.lines.iter().all(|l| l.open_fails.is_none() && l.unreviewed.is_none()));
+    let value = serde_json::to_value(&v.lines).unwrap();
+    assert!(value.as_array().unwrap().iter().all(|l|l["open_fails"].is_null() && l["unreviewed"].is_null()));
+}
+
+#[tokio::test]
+async fn quality_mirror_new_paths_share_g14_total_and_ignore_sync_json() {
+    let f = Fixture::new();
+    let hub = f.hub().await;
+    let repo = f.seed(&hub).await;
+    write(&repo, "research/tools/rk.py", "RK_VERSION = '0.6.0'\n");
+    // JSON 每份合法且恰好 1 MiB，各自 blob 不同，合计超过 64 MiB。
+    for i in 0..65 {
+        let prefix = format!("{{\"kind\":\"review\",\"n\":{i},\"padding\":\"");
+        let text = format!("{prefix}{}\"}}", "x".repeat(MAX_BLOB - prefix.len() - 2));
+        write(&repo, &format!("research/audits/review-{i:02}.json"), &text);
+    }
+    write(&repo, "research/sources/unused/nested.json", &"x".repeat(MAX_BLOB + 1));
+    write(&repo, "research/audits/plan-unused.json", &"x".repeat(MAX_BLOB + 1));
+    commit(&repo, "超过总读取预算", false).await;
+    let head = g(&repo, &["rev-parse", "HEAD"]).await.trim().to_string();
+    let branches = vec![Branch { name: "research/demo".into(), head: head.clone(), committed: None, subject: String::new() }];
+    let (_, blobs, skipped) = read_objects(&repo, "research", &branches).await.unwrap();
+    assert!(blobs.values().map(Vec::len).sum::<usize>() <= MAX_TOTAL);
+    assert_eq!(skipped, 2, "第 64、65 份记录超出总预算；无关路径不计");
+    let sync = vec![Branch { name: "sync/test".into(), head, committed: None, subject: String::new() }];
+    let (_, blobs, skipped) = read_objects(&repo, "research", &sync).await.unwrap();
+    assert!(blobs.is_empty());
+    assert_eq!(skipped, 0, "未并入机器的质量 JSON 不应抢占预算");
+}
+
+#[tokio::test]
+async fn quality_mirror_skips_reviewed_bodies_and_old_version_records() {
+    let f = Fixture::new();
+    let hub = f.hub().await;
+    let repo = f.seed(&hub).await;
+    write(&repo, "research/tools/rk.py", "RK_VERSION = '0.6.0'\n");
+    write(&repo, "research/results/reviewed.md", &"x".repeat(MAX_BLOB + 1));
+    let hash = g(&repo, &["hash-object", "research/results/reviewed.md"]).await.trim().to_string();
+    write(
+        &repo,
+        "research/audits/review-1.json",
+        &json!({"kind":"review","files":[{"path":"results/reviewed.md","git_blob":hash}],"items":[]}).to_string(),
+    );
+    commit(&repo, "核过的正文不需要读取", false).await;
+    let mut branches = vec![Branch {
+        name: "research/demo".into(),
+        head: g(&repo, &["rev-parse", "HEAD"]).await.trim().to_string(),
+        committed: None,
+        subject: String::new(),
+    }];
+    let (trees, blobs, skipped) = read_objects(&repo, "research", &branches).await.unwrap();
+    assert_eq!(skipped, 0);
+    assert!(!blobs.contains_key(&hash));
+    assert_eq!(quality::derive(&project(), &trees, &blobs, &mut []), Some(ProjectTrust::default()));
+    write(&repo, "research/tools/rk.py", "RK_VERSION = '0.5.9'\n");
+    write(&repo, "research/sources/unused.json", &"x".repeat(MAX_BLOB + 1));
+    // metrics 只需存在性，不能因与未读取的 review 同 blob 而偷偷消耗正文预算。
+    write(&repo, "research/runs/r1/metrics.json", &std::fs::read_to_string(repo.join("research/audits/review-1.json")).unwrap());
+    commit(&repo, "旧版不读取新记录", false).await;
+    branches[0].head = g(&repo, &["rev-parse", "HEAD"]).await.trim().to_string();
+    let (trees, blobs, skipped) = read_objects(&repo, "research", &branches).await.unwrap();
+    assert_eq!(skipped, 0);
+    assert_eq!(blobs.len(), 1);
+    assert!(quality::derive(&project(), &trees, &blobs, &mut []).is_none());
+}
+
+#[tokio::test]
+async fn quality_mirror_q15_deleted_result_keeps_line_fail() {
+    let f = Fixture::new();
+    let hub = f.hub().await;
+    let repo = f.seed(&hub).await;
+    write(&repo, "research/tools/rk.py", "RK_VERSION = '0.6.0'\n");
+    write(&repo, "research/results/r1.md", "结果 42\n");
+    write(
+        &repo,
+        "research/runs/r1/meta.json",
+        r#"{"run_id":"r1","line":"alpha","exit_code":0}"#,
+    );
+    write(
+        &repo,
+        "research/state/alpha.md",
+        "---\ntoken: 1\nholder: mac\n---\n**阶段**：验证\n",
+    );
+    write(
+        &repo,
+        "research/audits/review-q15.json",
+        r#"{"kind":"review","files":[],"items":[{"id":"1","file":"results/r1.md","verdict":"fail"}]}"#,
+    );
+    commit(&repo, "Q15 未关闭问题", false).await;
+    g(&repo, &["push", "-q", "origin", "HEAD"]).await;
+    let p = f.project(&hub).await;
+    let before = f.core.project_view(&p.id, false).await.unwrap();
+    assert_eq!(before.trust.as_ref().unwrap().open_fails, 1);
+    assert_eq!(
+        before
+            .lines
+            .iter()
+            .find(|l| l.line == "alpha")
+            .unwrap()
+            .open_fails,
+        Some(1)
+    );
+    std::fs::remove_file(repo.join("research/results/r1.md")).unwrap();
+    commit(&repo, "删除结果页不能关闭问题", false).await;
+    g(&repo, &["push", "-q", "origin", "HEAD"]).await;
+    let after = f.core.project_view(&p.id, true).await.unwrap();
+    assert_eq!(
+        after.trust.as_ref().unwrap().open_fails,
+        1,
+        "删除页不得丢失项目 fail"
+    );
+    assert_eq!(
+        after
+            .lines
+            .iter()
+            .find(|l| l.line == "alpha")
+            .unwrap()
+            .open_fails,
+        Some(1),
+        "删除页不得丢失研究线 fail"
+    );
 }

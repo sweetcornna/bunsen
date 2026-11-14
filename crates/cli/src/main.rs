@@ -131,9 +131,11 @@ enum Cmd {
         #[arg(long)]
         limit: Option<u32>,
     },
-    /// 科研面板；带 --run 时看某次运行的详情
+    /// 科研面板；--run 看运行详情，--trust 看研究可信度
     Research {
         id: String,
+        #[arg(long, conflicts_with_all = ["run", "lines"])]
+        trust: bool,
         #[arg(long)]
         run: Option<String>,
         #[arg(long)]
@@ -194,14 +196,22 @@ fn print_project_view(v: &ProjectView) {
     for m in &v.machines {
         println!("机器 {}  领先 {}  落后 {}  {}", m.code, m.ahead, m.behind, if m.conflict == Some(true) { "有冲突" } else { "" });
     }
+    if let Some(t) = &v.trust {
+        println!(
+            "可信度：未关闭问题 {}；未核文件 {}；解析不到的引用 {}；已撤稿 {}",
+            t.open_fails, t.unreviewed, t.unresolved_citations, t.retracted_citations
+        );
+    }
     for l in &v.lines {
         println!(
-            "研究线 {}  #{}  推进者={}  阶段={}  来源={}",
+            "研究线 {}  #{}  推进者={}  阶段={}  来源={}  未关闭问题={}  未核文件={}",
             l.line,
             l.token,
             l.holder.as_deref().unwrap_or("-"),
             l.stage.as_deref().unwrap_or("-"),
-            l.source
+            l.source,
+            l.open_fails.map(|n| n.to_string()).as_deref().unwrap_or("—"),
+            l.unreviewed.map(|n| n.to_string()).as_deref().unwrap_or("—")
         );
         for next in &l.next {
             println!("  {next}");
@@ -218,6 +228,48 @@ fn print_project_view(v: &ProjectView) {
     }
     for w in &v.warnings {
         println!("注意：{w}");
+    }
+}
+
+fn print_trust(v: &ResearchTrust) {
+    if !v.available {
+        println!("{}", v.reason.as_deref().unwrap_or("研究可信度不可用"));
+        return;
+    }
+    println!("研究可信度（rk {}；{}）", v.rk_version.as_deref().unwrap_or("-"), v.checked_at);
+    if let Some(check) = &v.check {
+        let claims = check["claims"].as_array();
+        let count = |state: &str| claims.map(|a| a.iter().filter(|c| c["trust"] == state).count()).unwrap_or(0);
+        println!(
+            "结论数 {}；可信 {}；需留意 {}；有问题 {}",
+            check["counts"]["claims"].as_u64().unwrap_or_else(|| claims.map_or(0, |a| a.len() as u64)),
+            count("ok"),
+            count("warn"),
+            count("fail")
+        );
+        for (key, label) in [("errors", "错误"), ("warnings", "警告")] {
+            if let Some(issues) = check[key].as_array() {
+                println!("{label}：{}", issues.len());
+                for issue in issues {
+                    println!("  [{}] {}", issue["code"].as_str().unwrap_or(""), issue["message"].as_str().unwrap_or(""));
+                }
+            }
+        }
+    }
+    if let Some(fails) = v.review.as_ref().and_then(|r| r["open_fails"].as_array()) {
+        println!("未关闭的 fail：{}", fails.len());
+        for f in fails {
+            println!(
+                "  {} {}:{} {}",
+                f["ref"].as_str().unwrap_or(""),
+                f["file"].as_str().unwrap_or(""),
+                f["line"],
+                f["note"].as_str().unwrap_or("")
+            );
+        }
+    }
+    for f in &v.failures {
+        println!("执行失败 [{}]：{}", serde_json::to_value(&f.command).unwrap().as_str().unwrap(), f.message);
     }
 }
 
@@ -600,14 +652,27 @@ async fn run(cli: Cli) -> Result<(), Error> {
                 print_json(&v);
             } else {
                 for a in &v.items {
-                    println!("{}  {:>9}  {}  {}", a.mtime, a.size, a.kind, a.path);
+                    let provenance = a
+                        .run
+                        .as_ref()
+                        .map(|r| format!("  出自 {}{}", r.run_id, if r.verified == Some(false) { "（运行之后改过）" } else { "" }))
+                        .unwrap_or_default();
+                    println!("{}  {:>9}  {}  {}{}", a.mtime, a.size, a.kind, a.path, provenance);
                 }
                 if v.truncated {
                     println!("（只显示前 {} 条）", v.items.len());
                 }
             }
         }
-        Cmd::Research { id, run, lines } => match run {
+        Cmd::Research { id, trust: true, .. } => {
+            let v = core.research_trust(&id).await?;
+            if json {
+                print_json(&v);
+            } else {
+                print_trust(&v);
+            }
+        }
+        Cmd::Research { id, run, lines, .. } => match run {
             Some(r) => {
                 let v = core.research_run(&id, &r, lines).await?;
                 if json {
@@ -617,6 +682,11 @@ async fn run(cli: Cli) -> Result<(), Error> {
                     println!("--- 日志末尾 ---\n{}", v.log_tail);
                     if let Some(m) = &v.metrics {
                         println!("--- metrics.json ---\n{}", serde_json::to_string_pretty(m).unwrap_or_default());
+                    }
+                    for (name, value) in [("env.json", &v.env), ("outputs.json", &v.outputs)] {
+                        if let Some(value) = value {
+                            println!("--- {name} ---\n{}", serde_json::to_string_pretty(value).unwrap_or_default());
+                        }
                     }
                     if let Some(r) = &v.result_md {
                         println!("--- 结果页 ---\n{r}");
@@ -633,6 +703,9 @@ async fn run(cli: Cli) -> Result<(), Error> {
                     println!("研究目录：{}；循环：{}", v.home, if v.loop_.on { "开" } else { "关" });
                     if let Some(b) = &v.loop_.blocked {
                         println!("在等用户：{b}");
+                    }
+                    if let Some(plan) = &v.plan_md {
+                        println!("--- 计划 ---\n{plan}");
                     }
                     for r in &v.runs {
                         println!(
@@ -788,3 +861,7 @@ mod project_cli_tests {
 #[cfg(test)]
 #[path = "../tests/support/r5.rs"]
 mod r5_support;
+
+#[cfg(test)]
+#[path = "../tests/support/quality.rs"]
+mod quality_support;

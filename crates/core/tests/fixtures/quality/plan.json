@@ -1,0 +1,1 @@
+{"present":true,"approved":true,"approved_at":"2026-11-13T00:00:00Z","changed_since_approval":false,"deviations_since_approval":0,"phases":[{"title":"验证","steps":[{"id":"S1","step":"基线","status":"完成","prereg":null,"deliverables":[{"path":"results/r1.md","exists":true}]}]}]}

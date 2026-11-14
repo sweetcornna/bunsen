@@ -700,3 +700,165 @@ MCP 新增工具 `list_projects`、`project_view`（参数 `project`、`refresh?
 | G23 | G14 警告里的 N 按去重后的路径计 | 12.4 |
 | G24 | 指定服务器的参数接受 id 或别名；保留 id `local` 只指本机，不按别名回退 | 12.1 |
 | G25 | rk sync 合并遵循 git 的规则：快进保留暂存内容；真正合并要求暂存区干净，否则不合并、不算冲突；HEAD 移动后不回滚 | 12.3.1 |
+
+## 13. 研究质量（v1.4）
+
+研究工作台 v2 第四期新增，旧接口不变；总则沿用第 0 节。正文里的【Q7】等标记对应 13.8 的修订表。
+
+Bunsen 只透传和展示研究插件 `rk`（0.6.0）的结果，规则只在 `rk` 里实现一次：`RkCheck`、`RkReviewStatus`、`RkCiteReport`、`RkPlanStatus`、`RkEnv`、`RkOutputs` 这些类型和各条规则见内嵌插件的 `plugins/research/docs/records.md`（下文写作“records.md”）。唯一例外是项目视图（13.5）：它不连服务器，要在镜像里按同一套规则数数。本轮不新增错误码；脱敏、报错摘要沿用 12.0 和 12.4 的 G20、G22。
+
+### 13.1 可信度
+
+`GET /api/sessions/:id/research/trust` → `ResearchTrust`
+
+在会话的工作目录里跑一个远程脚本：按科研面板的方式确定研究目录，读 `<研究目录>/tools/rk.py` 前 1 MiB 里的 `RK_VERSION`；版本够新时依次执行下面四条命令，各自限时 60 秒，整个脚本限时 150 秒，结果用分段标记带回：
+
+```
+cd <workdir> && python3 <home>/tools/rk.py check --json
+python3 <home>/tools/rk.py review status --json
+python3 <home>/tools/rk.py cite check --offline --json
+python3 <home>/tools/rk.py plan status --json
+```
+
+```ts
+type ResearchTrust = {
+  available: boolean;
+  reason: string | null;       // available=false 时：没有研究目录 / 没有 rk.py / rk.py 旧于 0.6.0（提示在这台机器上执行 /research:resume 升级研究工具）
+  rk_version: string | null;   // 读 rk.py 里的 RK_VERSION
+  checked_at: string;
+  check: RkCheck | null;
+  review: RkReviewStatus | null;
+  cite: RkCiteReport | null;
+  plan: RkPlanStatus | null;
+  failures: { command: "check" | "review" | "cite" | "plan"; message: string }[];
+};
+```
+
+- `available=false` 时四个字段为 null，`failures` 为 `[]`，不执行任何命令。版本识别不了按旧于 0.6.0 处理。
+- 服务器没有 python3 时 `available` 仍为 true，四条命令各记一条 `failures`。
+- 某条命令超时、输出不是 JSON 对象、或超过 4 MiB：对应字段为 null，`failures` 记一条（message 按 G22 摘要、G20 脱敏）。
+- 输出是 JSON 对象，但 `ok === false` 且带字符串 `error`（提前退出），或缺少该类型的必有键（check：`counts`；review：`files`；cite：`items`；plan：`present`）：同样是对应字段为 null、`failures` 记一条，message 取 `error` 按 G22、G20 处理【Q7】。
+- `rk check` 退出码 1 而输出合法，是正常情况；`rk cite check` 有 `not_found`、`retracted` 或 `error` 时退出码也是 1，同样按正常处理。其他非 0 退出码记一条 `failures`。
+- Bunsen 不解释这些对象，原样透传，只对其中所有字符串（含对象的键）做 G20 脱敏。
+- 不在服务器端缓存。
+- 工作目录在服务器上不存在时返回 `not_found`；连不上等执行错误沿用原有的错误码。
+
+### 13.2 研究记录
+
+`GET /api/sessions/:id/research` 增加：
+
+```ts
+{ plan_md: string | null;       // PLAN.md
+  repo_prefix: string | null }  // workdir 相对仓库根的前缀（git rev-parse --show-prefix）；workdir 就是仓库根时为 ""，不在 git 仓库里为 null【Q8】
+```
+
+前端用 `repo_prefix` 把相对仓库根的路径（`outputs.json`、`meta.inputs`、计划交付物的 `resolved`）换成相对 workdir 的路径再预览【Q8】。
+
+运行详情 `GET /api/sessions/:id/research/run` 增加：
+
+```ts
+{ env: RkEnv | null;          // runs/<id>/env.json，≤ 256 KiB，超出或不合法为 null
+  outputs: RkOutputs | null } // runs/<id>/outputs.json，≤ 1 MiB，超出或不合法为 null
+```
+
+输入清单在 `meta.inputs` 里，已经随 `meta` 返回。
+
+### 13.3 产物的来源
+
+`GET /api/sessions/:id/artifacts` 的 `Artifact` 增加 `run`：
+
+```ts
+type Artifact = { /* 原有字段 */ run: { run_id: string; verified: boolean | null } | null };
+```
+
+- 只在服务器有 python3 时计算，否则所有 `run` 为 null。
+- 读 `<home>/runs/*/outputs.json`：最多 2000 条运行，每份 ≤ 4 MiB，格式不对的清单或条目跳过。建“仓库根相对路径（或绝对路径）→ 最近写它的运行”的表，同一路径有几次运行写过时取 `written_at` 最新的。
+- 产物路径相对 workdir，换算成仓库根相对路径（workdir 不在 git 仓库里时用绝对路径）后查表。查不到为 null。
+- 匹配之前，产物和清单条目的真实路径都必须在 workdir 内；越界的不参与匹配，`run` 为 null，不可能得到 `verified=true`【Q15】。
+- 只为本次返回的产物（排序、截断之后）计算。
+- `verified`：
+  - 大小与记录不同：false；
+  - 大小相同、记录有 sha256、而且本次请求累计读取没超过 512 MiB：按 records.md 1.1 的 H 比较，相同为 true，不同或读取期间文件变了为 false；
+  - 其余情况（记录 `unhashed`、超出读取预算）：null。
+
+### 13.4 按路径读文件
+
+按路径读文件的接口（第 7 节的 `file`、11.1 的 `raw`，以及它们共用的远程读取）**不对 path 做 trim**，按原样当作路径；path 为空，或含控制字符（U+0000–U+001F、U+007F–U+009F）时返回 `bad_request`【Q14】。第 7 节的 `files`、`git/diff` 带 path 时用同一条校验。
+
+原因：服务端原先先 trim 再展开 `~`，前端按段检查时看到的是“相对路径”，服务端实际读的却是 `/etc/passwd`、`~/.ssh/…` 这类工作目录外的文件。
+
+### 13.5 项目视图（汇合点镜像，不连服务器）
+
+```ts
+type ProjectView = { /* 原有字段 */ trust: ProjectTrust | null };
+type ProjectLine = { /* 原有字段 */ open_fails: number | null; unreviewed: number | null };
+type ProjectTrust = {
+  open_fails: number;
+  unreviewed: number;
+  unresolved_citations: number;   // sources/*.json 里 status 为 not_found 的不同 id 数
+  retracted_citations: number;    // status 为 ok 且 retracted 为 true 的不同 id 数
+};
+```
+
+- 只看**研究分支**（已汇合的记录）；还没并入的机器不计入。
+- 研究分支上 `<home>/tools/rk.py` 的 `RK_VERSION` ≥ 0.6.0 时，`trust` 非 null；否则 `trust` 为 null，各研究线的 `open_fails`、`unreviewed` 也为 null（不是 0）【Q10】。
+- 结论文件按 records.md 1.2 列出：
+  - 一个文件核过 ⟺ 某条 `audits/review-*.json`（`kind == "review"`）的 `files` 里，有 path 相同、`git_blob` 等于镜像树里该文件 blob id 的项；
+  - 没核过的文件读出正文，按 records.md 1.3（用内嵌插件模板）判断是否空白，空白的不计。
+- 未关闭的 fail 按 records.md 2.5，读 `audits/review-*.json` 和 `audits/resolve-*.json`。结果页删除之后，页上的 fail 仍按 review 条目计入【Q15】。
+- 按研究线计数：`results/<运行ID>.md` 归到该运行 `meta.line` 所在的线（读研究分支上的 `meta.json`）；其他结论文件只计入项目总数。
+- 引用：读 `sources/*.json`，同一个 id 取 `checked_at` 最新的一份。
+- 警告：放在 G14 警告之前，依次是
+  - `open_fails > 0` 或 `unreviewed > 0`：“研究分支上有 N 个未关闭的核对问题、M 个结论文件还没核过”；
+  - `unresolved_citations > 0`：“研究分支上有 N 条引用解析不到”；
+  - `retracted_citations > 0`：“研究分支上有 N 篇被引文献已撤稿”。
+- 读 `audits/`、`sources/` 的 JSON 和结论文件正文，都计入 G14 的上限，只取视图用得到的路径。
+- `trust` 照旧返回，供命令行、MCP 使用；界面不另设摘要卡（13.6）【Q11】。
+
+### 13.6 前端
+
+- **研究面板新增“可信度”页**（数据来自 13.1），打开或点“刷新”时请求：
+  - 结论表：编号、状态、结论、推断审计（证据运行里最严的总评；没有记“未审”）、核对、证据运行、引用、可信度；
+  - 未关闭的 fail：出处（`文件:行`），复制关闭命令。命令写完整形式 `python3 <research.home>/tools/rk.py review resolve '<ref>' --note "…"`【Q12】；
+  - 最近一次 `rk check` 的错误、警告，按 code 前缀分组；
+  - 计划：各阶段的步骤、状态和交付物是否存在，以及批准状态、批准后是否改过；
+  - `available=false` 时显示 `reason`；`failures` 逐条显示。
+- **运行详情**新增“环境”（解释器、包管理器与包数量可展开、显卡驱动和 CUDA、系统、指纹）、“输入”、“输出”三节；输出里的文件在 workdir 内的可以点开预览（路径按 13.2 用 `repo_prefix` 换算）。
+- **产物面板**：`run` 非 null 时标“出自 <运行ID>”，这是精确对应，不再写“推断”；`verified === false` 时加“运行之后改过”。`run` 为 null 时退回现有的按修改时间推断，仍标“推断”。
+- **项目视图**：研究线表加“未关闭问题”“未核文件”两列，值为 null 时显示“—”【Q10】。不另设 trust 摘要卡：数字已经体现在 13.5 的警告和研究线两列里，界面保持简约【Q11】。
+- 路径预览一律经前端路径出口（`ui/src/lib/paths.ts`），它另外拒绝首尾带空白或含控制字符的段【Q14】。
+- 所有界面文案自己写，`dev/mock-server.ts` 同步实现新接口和新字段。
+
+### 13.7 命令行与 MCP
+
+命令行（`--json` 输出与 HTTP 相同的 JSON）：
+
+```
+bunsen research <会话> --trust [--json]     研究可信度；不能与 --run、--lines 同用
+```
+
+文字输出包括：结论数与各可信度计数、错误和警告（带 code）、未关闭的 fail，以及执行失败的命令。已有子命令的文字输出补上新字段：`bunsen research <会话>` 打印计划，`--run` 打印 `env.json`、`outputs.json`；`bunsen artifacts` 在有 `run` 时写“出自 <运行ID>”，`verified` 为 false 时加“运行之后改过”；`bunsen project view` 打印 `trust` 一行和每条研究线的两个数。
+
+MCP 新增工具 `research_trust`，参数 `session`。`research_show`、`session_artifacts`、`project_view` 的返回值随 HTTP 带上新字段。
+
+### 13.8 修订记录
+
+第四期开发中对已确认契约（2026-11-13）的修订，均在 2026-11-13，是主编排对前端交付报告、联调和各轮审查的裁定。这里只列影响本节的条目；插件侧的修订见 records.md 的修订记录。
+
+| 编号 | 内容 | 位置 |
+| --- | --- | --- |
+| Q7 | rk 输出 `ok === false` 且带 `error`，或缺少该类型的必有键：对应字段为 null，`failures` 记一条 | 13.1 |
+| Q8 | `GET /api/sessions/:id/research` 增加 `repo_prefix`，前端据此预览相对仓库根的路径 | 13.2 |
+| Q10 | `trust` 为 null 时研究线的 `open_fails`、`unreviewed` 也为 null，前端显示“—” | 13.5、13.6 |
+| Q11 | 项目视图不另设 trust 摘要卡；`trust` 字段照旧返回，供命令行、MCP 使用 | 13.5、13.6 |
+| Q12 | 界面上复制的关闭命令写完整的 `python3 <research.home>/tools/rk.py …` 形式 | 13.6 |
+| Q14 | 按路径读文件的接口不对 path 做 trim，空 path 或含控制字符返回 `bad_request`；前端路径出口拒绝首尾带空白或含控制字符的段 | 13.4、13.6 |
+| Q15 | 产物来源匹配要求文件在工作目录内，越界不得 `verified=true`；项目视图在结果页删除后仍按 review 条目计未关闭 fail | 13.3、13.5 |
+| Q17d | 可信度脚本对 `rk cite check` 也把退出码 1 当作正常结果（2026-11-14） | 13.1 |
+
+### 13.9 已知限制（0.4.0）
+
+- 项目视图统计未关闭 fail 时，不像 rk 那样先剔除无效的关闭记录（例如指向不存在条目的 resolve），极端情况下与会话里 `rk review status` 的计数不同。
+- 因 12.4 的读取上限（G14）跳过的结论文件没有内容，不计为未核，只有 G14 的通用提示。
+- MCP 工具 `research_trust` 的会话参数名是 `session`（照契约），其他工具是 `session_id`。
+- 插件侧的已知问题见 `plugins/research/CHANGELOG.md` 0.6.0。

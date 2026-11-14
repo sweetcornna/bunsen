@@ -5,3 +5,5 @@ LESSONS.md merge=union
 # 生成的汇总：合并后重新生成（rk status --write、rk line status --write；rk check 会提醒）。
 RUNS.md merge=union
 STATE.md merge=union
+# 摘录只追加；引用元数据按机器分文件。
+sources/excerpts.md merge=union

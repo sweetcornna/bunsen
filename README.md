@@ -34,7 +34,7 @@ Bunsen 是一个自托管的科研工作台，定位类似 Claude Science：把 
 
 <table>
 <tr>
-<td width="50%"><b>科研面板</b><br>运行、结论、想法；每条结论的证据都能点开。<br><br><img src="docs/images/research.png" alt="科研面板"></td>
+<td width="50%"><b>科研面板</b><br>运行、结论、想法；每条结论的证据都能点开，“可信度”页看它核过没有。<br><br><img src="docs/images/research.png" alt="科研面板"></td>
 <td width="50%"><b>服务器与显卡</b><br>拖入 <code>~/.ssh/config</code> 和私钥，自动配对、测连接、探测环境和显卡。<br><br><img src="docs/images/servers.png" alt="服务器"></td>
 </tr>
 <tr>
@@ -151,7 +151,8 @@ flowchart LR
 - **本机也是一台服务器**。服务器列表里固定有“本机”，会话跑在这台电脑的 tmux 里，不经 ssh；部署、终端、科研面板和远程服务器完全一样。不想要时设 `BUNSEN_NO_LOCAL=1`。
 - **研究项目**把几台机器上的同一项研究汇到一处。部署时选“接入研究项目”，每台机器把自己的记录推到汇合点（任一 git 仓库，或某台服务器上的裸仓库）的 `sync/<代号>` 分支，由插件的 `rk sync` 自动并入研究分支。项目页显示每台机器的进度、是否会冲突、各条研究线现在由谁推进、所有运行，以及需要你决定的事；“立即同步”让每台机器同步一次。
 - **科研面板**读工作目录下的 `research/`：运行（日志、指标、结果页，在跑的自动刷新）、结论账本、想法、总览。
-- **产物**汇总图、表、PDF、Notebook、网页，带缩略图和预览，并标出大概出自哪次运行。
+- **研究质量**。“可信度”页把账本里的每条结论摆在一起：推断审计、有没有核对过、证据运行、引用、可信度；另列审计员核出还没关闭的问题（可以复制关闭命令）、`rk check` 的错误和警告、研究计划各步骤和批准状态。这些都来自插件：结论没核对时 Stop 钩子不让会话停下（复核闸门，同一批问题拦三次后交给你决定）；`rk run --in/--out` 记下输入、产物清单和环境，运行详情里有“环境”“输入”“输出”三节；`rk cite check` 核对 DOI、arXiv 解析不解析得到、有没有撤稿；`PLAN.md` 批准一次，之后只记偏离。项目页的研究线表多了“未关闭问题”“未核文件”两列。
+- **产物**汇总图、表、PDF、Notebook、网页，带缩略图和预览。运行的产物清单里有它时标出确切出自哪次运行、运行之后有没有改过，否则按修改时间推断。
 - **显卡**实时显示每张卡的占用和使用者，避免抢到别人的卡。
 - **主机笔记**：每台服务器一份 `~/.bunsen/HOST.md`，记这台机器的规矩和坑。
 - **引用**：在文件或产物里选中一段，随消息一起发给 Agent。
@@ -192,6 +193,7 @@ bunsen sessions
 bunsen send <id> '先跑单元测试'
 bunsen capture <id> --lines 40
 bunsen attach <id>
+bunsen research <id> --trust
 bunsen project add demo git@github.com:me/demo-research.git
 bunsen deploy --server local --agent claude-code --workdir '~/demo' --project demo
 bunsen project view demo

@@ -49,6 +49,8 @@ pub fn tools() -> Value {
              json!({ "session_id": sess }), &["session_id"]),
         tool("session_artifacts", "列出会话工作目录里的产物：图、PDF、表格、notebook、html、报告（GET /api/sessions/:id/artifacts）",
              json!({ "session_id": sess, "limit": { "type": "integer", "minimum": 1, "maximum": 1000, "default": 300 } }), &["session_id"]),
+        tool("research_trust", "查看研究可信度（GET /api/sessions/:id/research/trust），独立返回检查、复核、引用与计划结果",
+             json!({ "session": sess }), &["session"]),
         tool("research_show", "科研面板（GET /api/sessions/:id/research）；给 run_id 时返回该次运行详情（GET /api/sessions/:id/research/run）",
              json!({ "session_id": sess, "run_id": { "type": "string" }, "lines": { "type": "integer", "minimum": 1, "maximum": 2000 } }), &["session_id"]),
         tool("host_notes_get", "读服务器上的主机笔记 ~/.bunsen/HOST.md（GET /api/servers/:id/notes）",
@@ -111,6 +113,7 @@ async fn simple_tool(core: &Arc<Core>, name: &str, a: &Value) -> Result<Value, E
             let lim = a.get("limit").and_then(Value::as_u64).map(|n| n.min(u32::MAX as u64) as u32);
             json!(core.artifacts(&arg_str(a, "session_id")?, lim).await?)
         }
+        "research_trust" => json!(core.research_trust(&arg_str(a, "session")?).await?),
         "research_show" => {
             let id = arg_str(a, "session_id")?;
             match a.get("run_id").and_then(Value::as_str) {
@@ -242,6 +245,7 @@ mod tests {
                 "session_capture",
                 "session_stop",
                 "session_artifacts",
+                "research_trust",
                 "research_show",
                 "host_notes_get",
                 "host_notes_set",
