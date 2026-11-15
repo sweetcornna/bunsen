@@ -1,6 +1,7 @@
 import { createRoot } from "react-dom/client";
 import "@xterm/xterm/css/xterm.css";
 import "./styles/tokens.css";
+import "./styles/components.css";
 import "./styles/app.css";
 import { App } from "./App";
 import { ErrorBoundary } from "./components/ErrorBoundary";

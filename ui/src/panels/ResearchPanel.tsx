@@ -1,27 +1,20 @@
-import { ArrowLeft, ExternalLink, FileText, FlaskConical, GitCommitHorizontal, Play, Quote, RefreshCw, WifiOff } from "lucide-react";
-import { useCallback, useEffect, useMemo, useRef, useState, type FocusEvent } from "react";
+import { ArrowLeft, FlaskConical, Quote, RefreshCw, WifiOff } from "lucide-react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Markdown } from "../components/Markdown";
 import { FilePreview, type Quoted } from "../components/Preview";
-import { Button, cx, Dot, Empty, IconButton, Pill, Segmented, Spinner, type Tone } from "../components/ui";
+import { Badge, Button, Dot, Empty, Fact, Facts, ICON, IconButton, Loading, Notice, Row, ScrollArea, Spinner, Table, Tabs, When } from "../components/ui";
 import { api, asApiError, type ApiError, type Research, type ResearchRun, type ResearchTrust, type RunDetail, type Session } from "../lib/api";
-import { relTime } from "../lib/format";
+import { fmtFull, runDuration } from "../lib/format";
 import { previewPath, type PathCtx } from "../lib/paths";
-import { asRecord, citeUrl, claimTone, envOf, inputsOf, normalizeTrust, outputsOf, preregPaths, runTone } from "../lib/research";
+import { asRecord, citeUrl, envOf, inputsOf, isLiveRun, normalizeTrust, outputsOf, preregPaths, runKind, runStatus } from "../lib/research";
 import { useApp } from "../lib/store";
 import { EnvView, InputsView, OutputsView } from "./RunProvenance";
-import { TrustView } from "./TrustView";
+import { EvChip, TrustView } from "./TrustView";
 
 type Sub = "state" | "runs" | "claims" | "trust" | "ideas" | "overview" | "notes";
 type RunTab = "log" | "metrics" | "result" | "env" | "inputs" | "outputs" | "meta";
 /** 可信度上次取到不到这么久时，重新打开这一页不自动再取（审查 P4F1-08），点刷新照取。 */
 const TRUST_FRESH_MS = 60_000;
-/** 页签栏放不下时可以横向滚动；键盘移到的页签整个滚进可见区（Chrome 对部分可见的元素获得焦点时不滚，焦点框会被裁掉，审查 P4F1-05）。 */
-const revealTab = (e: FocusEvent<HTMLDivElement>) => {
-  if (e.target !== e.currentTarget) e.target.scrollIntoView({ block: "nearest", inline: "nearest" });
-};
-
-const ideaTone = (s: string): Tone => (s.includes("已确认") ? "ok" : /通过|预登记/.test(s) ? "accent" : /未过|未确认/.test(s) ? "warn" : s.includes("否决") ? "err" : "mute");
-
 /** 从 Markdown 里取出表头含 must 的那张表。 */
 function mdTable(md: string | null | undefined, must: string): Record<string, string>[] {
   if (!md) return [];
@@ -174,8 +167,8 @@ export function ResearchPanel({ session, active, focusRun, onCompose, onQuote, o
         path={file}
         onQuote={onQuote}
         left={
-          <IconButton label="返回" onClick={() => setFile(null)}>
-            <ArrowLeft size={14} />
+          <IconButton label="返回" size="sm" data-back="" onClick={() => setFile(null)}>
+            <ArrowLeft size={ICON.sm} />
           </IconButton>
         }
       />
@@ -190,7 +183,7 @@ export function ResearchPanel({ session, active, focusRun, onCompose, onQuote, o
   if (!data && offline)
     return (
       <div className="panel">
-        <Empty icon={<WifiOff size={20} />} title="连不上服务器" hint={err ?? "这个对话所在的服务器这次没连上，取不到研究记录。"}>
+        <Empty icon={<WifiOff size={ICON.lg} />} title="连不上服务器" hint={err ?? "这个对话所在的服务器这次没连上，取不到研究记录。"}>
           <Button loading={loading} onClick={() => void load()}>
             重试
           </Button>
@@ -201,83 +194,67 @@ export function ResearchPanel({ session, active, focusRun, onCompose, onQuote, o
   if (data && !data.present)
     return (
       <div className="panel">
-        <Empty icon={<FlaskConical size={20} />} title="还没有研究记录" hint={withPlugin ? undefined : "此对话未加载科研插件"}>
+        <Empty icon={<FlaskConical size={ICON.lg} />} title="还没有研究记录" hint={withPlugin ? "在输入条里发 /research:start 开始一项研究。" : "这个对话没有加载科研插件。"}>
+          {/* 面板里的空状态按钮一律次要样式：primary 留给发送和“接续”，同屏一个（分屏稿 14.5） */}
           {withPlugin && (
-            <Button variant="primary" onClick={() => onCompose("/research:start ")}>
+            <Button onClick={() => onCompose("/research:start ")}>
               开始研究
             </Button>
           )}
-          <Button icon={loading ? <Spinner size={12} /> : <RefreshCw size={12} />} onClick={() => void load()}>
+          <Button variant={withPlugin ? "ghost" : "secondary"} loading={loading} onClick={() => void load()}>
             刷新
           </Button>
         </Empty>
       </div>
     );
 
-  const running = data?.runs.filter((r) => runTone(r.state) === "accent").length ?? 0;
-  const confirmed = claims.filter((c) => (c["状态"] ?? "").includes("证实")).length;
+  const running = data?.runs.filter((r) => isLiveRun(r.state)).length ?? 0;
   const openEvidence = (e: Evidence) => {
     if (e.kind === "run") setRun(e.target);
     else if (e.kind === "file") openFile(e.target);
     else if (e.kind === "link") window.open(e.target, "_blank", "noopener,noreferrer");
   };
+  const busy = loading || (sub === "trust" && trustLoading);
 
   return (
     <div className="panel">
-      <div className="kpis">
-        <div className="kpi">
-          <span>循环</span>
-          <b className={data?.loop.blocked ? "c-warn" : data?.loop.on ? "c-ok" : "dim"}>{data?.loop.blocked ? "等你" : data?.loop.on ? "进行中" : "未开启"}</b>
+      {/* 两层导航：会话面板标签 → 这里的子页标签。计数并进标签，没有 KPI 条（设计稿 5.2） */}
+      <Tabs<Sub>
+        label="研究记录"
+        data-tabs="research"
+        value={sub}
+        onChange={setSub}
+        items={[
+          { value: "state", label: "状态" },
+          { value: "runs", label: "运行", count: data ? data.runs.length : null, icon: running > 0 ? <Dot tone="live" label={`${running} 个运行在进行`} /> : undefined },
+          { value: "claims", label: "结论", count: data ? claims.length : null },
+          { value: "trust", label: "可信度" },
+          { value: "ideas", label: "想法", count: data ? ideas.length : null },
+          { value: "overview", label: "总览" },
+          { value: "notes", label: "记录" },
+        ]}
+        end={
+          <>
+            {withPlugin && (
+              <Button size="sm" variant="ghost" title={data?.loop.on ? "研究循环在进行：问它现在到哪一步" : "研究循环没在进行：让它接着做"} onClick={() => onCompose(data?.loop.on ? "/research:status" : "/research:resume")}>
+                {data?.loop.on ? "问进展" : "接续"}
+              </Button>
+            )}
+            <IconButton label="刷新" size="sm" onClick={refresh}>
+              {busy ? <Spinner size={ICON.sm} /> : <RefreshCw size={ICON.sm} />}
+            </IconButton>
+          </>
+        }
+      />
+      {(data?.loop.blocked || (offline && data) || err) && (
+        <div className="panel-notices">
+          {data?.loop.blocked && <Notice tone="warn">研究循环在等你：{data.loop.blocked}</Notice>}
+          {offline && data && <Notice tone="warn">连不上服务器，下面是最近一次取到的内容。</Notice>}
+          {err && <Notice tone="err">{err}</Notice>}
         </div>
-        <button type="button" className="kpi" onClick={() => setSub("runs")}>
-          <span>运行</span>
-          <b>
-            {running > 0 && <Dot tone="accent" pulse />}
-            {running}
-            <i>/ {data?.runs.length ?? 0}</i>
-          </b>
-        </button>
-        <button type="button" className="kpi" onClick={() => setSub("claims")}>
-          <span>已证实</span>
-          <b>
-            {confirmed}
-            <i>/ {claims.length}</i>
-          </b>
-        </button>
-        <button type="button" className="kpi" onClick={() => setSub("ideas")}>
-          <span>想法</span>
-          <b>{ideas.length}</b>
-        </button>
-        <span className="grow" />
-        {withPlugin && (
-          <Button size="sm" variant="ghost" onClick={() => onCompose(data?.loop.on ? "/research:status" : "/research:resume")}>
-            {data?.loop.on ? "问进展" : "接续"}
-          </Button>
-        )}
-        <IconButton label="刷新" onClick={refresh}>
-          {loading || (sub === "trust" && trustLoading) ? <Spinner size={13} /> : <RefreshCw size={13} />}
-        </IconButton>
-      </div>
-      {data?.loop.blocked && <div className="note warn">{data.loop.blocked}</div>}
-      {offline && <div className="note warn">连不上服务器，下面是最近一次取到的内容。</div>}
-      {err && <div className="note err">{err}</div>}
-      <div className="panel-bar tabs-scroll" onFocus={revealTab}>
-        <Segmented
-          value={sub}
-          onChange={setSub}
-          options={[
-            { value: "state", label: "状态" },
-            { value: "runs", label: "运行" },
-            { value: "claims", label: "结论" },
-            { value: "trust", label: "可信度" },
-            { value: "ideas", label: "想法" },
-            { value: "overview", label: "总览" },
-            { value: "notes", label: "记录" },
-          ]}
-        />
-      </div>
-      <div className="scroll grow">
-        {!data && !err && <Empty title={<Spinner />} />}
+      )}
+      <ScrollArea className="panel-body" data-body="research">
+        {!data && !err && <Loading />}
         {data && sub === "state" && <Doc md={data.state_md} />}
         {data && sub === "trust" && <TrustView trust={trust} error={trustErr} loading={trustLoading} offline={offline} paths={paths} planMd={data.plan_md} onRun={setRun} onFile={openFile} onRetry={retryTrust} />}
         {data && sub === "overview" && <Doc md={data.overview_md ?? data.summary_md} />}
@@ -285,21 +262,11 @@ export function ResearchPanel({ session, active, focusRun, onCompose, onQuote, o
         {data &&
           sub === "runs" &&
           (data.runs.length === 0 ? (
-            <Empty title="还没有运行" />
+            <Empty title="还没有运行" hint="预登记或探索运行开始后会列在这里。" />
           ) : (
-            <div className="rows">
+            <div className="list" data-pad="">
               {[...data.runs].reverse().map((r) => (
-                <button key={r.run_id} type="button" className="run-row" onClick={() => setRun(r.run_id)}>
-                  <Dot tone={runTone(r.state)} pulse={runTone(r.state) === "accent"} />
-                  <span className="mono run-id ellipsis">{r.run_id}</span>
-                  <span className={cx("tag", r.kind === "explore" ? undefined : "accent")}>{r.kind === "explore" ? "探索" : "预登记"}</span>
-                  <span className="dim ellipsis grow">{r.note}</span>
-                  <span className="mono dim">{r.elapsed}</span>
-                  <span className={cx("run-state", runTone(r.state))}>
-                    {r.state}
-                    {r.exit_code ? ` ${r.exit_code}` : ""}
-                  </span>
-                </button>
+                <RunRow key={r.run_id} r={r} onOpen={() => setRun(r.run_id)} />
               ))}
             </div>
           ))}
@@ -308,25 +275,26 @@ export function ResearchPanel({ session, active, focusRun, onCompose, onQuote, o
           (claims.length === 0 ? (
             <Doc md={data.ledger_md} empty="还没有结论" />
           ) : (
-            <div className="rows">
+            <div className="items" data-claim-list="">
               {claims.map((c, i) => (
-                <div key={i} className="claim">
-                  <div className="claim-head">
-                    <span className="mono dim">{c["编号"]}</span>
-                    <Pill tone={claimTone(c["状态"] ?? "")}>{c["状态"]}</Pill>
-                    {c["性质"] && <span className="tag">{c["性质"]}</span>}
+                <div key={i} className="item" data-ledger-claim={c["编号"]}>
+                  <div className="item-meta">
+                    <span className="mono">{c["编号"]}</span>
+                    {c["状态"] && <Badge>{c["状态"]}</Badge>}
+                    {c["性质"] && <span>{c["性质"]}</span>}
                     <span className="grow" />
-                    <span className="dim">{c["日期"]}</span>
+                    {c["日期"] && <span className="nowrap">{c["日期"]}</span>}
                   </div>
-                  <div className="claim-text">{c["结论"]}</div>
-                  <div className="chips">
-                    {parseEvidence(c["证据"] ?? "", paths).map((e, k) => (
-                      <button key={k} type="button" className={cx("ev", e.kind)} disabled={e.kind === "text"} onClick={() => openEvidence(e)}>
-                        {e.kind === "run" ? <Play size={10} /> : e.kind === "file" ? <FileText size={10} /> : e.kind === "link" ? <ExternalLink size={10} /> : null}
-                        {e.label}
-                      </button>
-                    ))}
-                  </div>
+                  <div className="item-title">{c["结论"]}</div>
+                  {c["证据"] && (
+                    <div className="chips">
+                      {parseEvidence(c["证据"], paths).map((e, k) => (
+                        <EvChip key={k} kind={e.kind} onClick={e.kind === "text" ? undefined : () => openEvidence(e)} title={e.target}>
+                          {e.label}
+                        </EvChip>
+                      ))}
+                    </div>
+                  )}
                 </div>
               ))}
             </div>
@@ -336,38 +304,56 @@ export function ResearchPanel({ session, active, focusRun, onCompose, onQuote, o
           (ideas.length === 0 ? (
             <Doc md={data.ideas_md} empty="还没有想法" />
           ) : (
-            <div className="rows">
+            <div className="items" data-idea-list="">
               {ideas.map((c, i) => (
-                <div key={i} className="claim">
-                  <div className="claim-head">
-                    <span className="mono dim">{c["编号"]}</span>
-                    <Pill tone={ideaTone(c["状态"] ?? "")}>{c["状态"] || "候选"}</Pill>
-                    {c["簇"] && <span className="tag">{c["簇"]}</span>}
-                    {c["类型"] && <span className="tag">{c["类型"]}</span>}
+                <div key={i} className="item">
+                  <div className="item-meta">
+                    <span className="mono">{c["编号"]}</span>
+                    <Badge>{c["状态"] || "候选"}</Badge>
+                    {[c["簇"], c["类型"]].filter(Boolean).join(" · ")}
                   </div>
-                  <div className="claim-text">{c["想法"]}</div>
+                  <div className="item-title">{c["想法"]}</div>
                   {(c["可证伪的预测"] || c["最便宜的判决性检验"]) && (
-                    <dl className="idea-facts">
-                      {c["可证伪的预测"] && (
-                        <>
-                          <dt>预测</dt>
-                          <dd>{c["可证伪的预测"]}</dd>
-                        </>
-                      )}
-                      {c["最便宜的判决性检验"] && (
-                        <>
-                          <dt>检验</dt>
-                          <dd>{c["最便宜的判决性检验"]}</dd>
-                        </>
-                      )}
-                    </dl>
+                    <Facts>
+                      {c["可证伪的预测"] && <Fact label="预测">{c["可证伪的预测"]}</Fact>}
+                      {c["最便宜的判决性检验"] && <Fact label="检验">{c["最便宜的判决性检验"]}</Fact>}
+                    </Facts>
                   )}
                 </div>
               ))}
             </div>
           ))}
-      </div>
+      </ScrollArea>
     </div>
+  );
+}
+
+/** 运行列表的一行：编号（等宽）· 说明 · 类型 · 状态（第 4 节）· 时间。一行最多一个有色元素：进行中的点或失败的字。 */
+function RunRow({ r, onOpen }: { r: ResearchRun; onOpen: () => void }) {
+  const st = runStatus(r.state, r.exit_code);
+  const kind = runKind(r.kind);
+  const dur = runDuration(r, st.kind === "live");
+  return (
+    <Row
+      data-run={r.run_id}
+      onClick={onOpen}
+      title={`${r.run_id}${r.note ? `\n${r.note}` : ""}`}
+      lead={st.kind === "live" ? <Dot tone="live" label="进行中" /> : <span />}
+      name={
+        <>
+          <span className="mono t-meta">{r.run_id}</span>
+          {r.note && <span className="muted"> {r.note}</span>}
+        </>
+      }
+      meta={
+        <span className="run-meta-cells">
+          {kind.prereg ? <Badge>{kind.label}</Badge> : <span>{kind.label}</span>}
+          <span className={st.kind === "failed" ? "tone-err" : st.kind === "ok" || st.kind === "cancelled" ? "secondary" : undefined}>{st.label}</span>
+          {dur && <span>{dur}</span>}
+          <When iso={r.started_at} />
+        </span>
+      }
+    />
   );
 }
 
@@ -395,7 +381,7 @@ function RunView({ session, runId, run, home, paths, tab, setTab, onBack, onQuot
   const [err, setErr] = useState<string | null>(null);
   const logRef = useRef<HTMLPreElement | null>(null);
   const stick = useRef(true);
-  const live = run ? runTone(run.state) === "accent" : false;
+  const live = run ? isLiveRun(run.state) : false;
 
   useEffect(() => {
     let alive = true;
@@ -427,82 +413,73 @@ function RunView({ session, runId, run, home, paths, tab, setTab, onBack, onQuot
   const inputs = useMemo(() => inputsOf(meta), [meta]);
   const cmd = Array.isArray(meta.cmd) ? (meta.cmd as unknown[]).join(" ") : (run?.cmd ?? "");
   const commit = String(meta.git_commit ?? run?.commit ?? "").slice(0, 8);
+  const exit = typeof meta.exit_code === "number" ? meta.exit_code : (run?.exit_code ?? null);
+  const st = runStatus(run?.state ?? (typeof meta.status === "string" ? meta.status : null), exit);
+  const kind = runKind(run?.kind ?? (typeof meta.kind === "string" ? meta.kind : null));
+  const dur = run ? runDuration(run, live) : "";
+  // 返回条上的一行元信息：状态 · 类型 · 开始 · 时长。状态按第 4 节上色（只有失败用 err 字，进行中用点）。
+  const metaTitle = [st.label, kind.label, run?.started_at ? `开始 ${fmtFull(run.started_at)}` : "", dur && `用时 ${dur}`].filter(Boolean).join(" · ");
 
   return (
     <div className="panel">
-      <div className="panel-bar">
-        <IconButton label="返回" onClick={onBack}>
-          <ArrowLeft size={14} />
-        </IconButton>
-        {run && <Dot tone={runTone(run.state)} pulse={live} />}
-        <span className="mono ellipsis">{runId}</span>
-        {run && <span className="dim">{run.elapsed}</span>}
-        <span className="grow" />
-        <IconButton label="引用到消息" onClick={() => onQuote({ path: `${home}/runs/${runId}` })}>
-          <Quote size={13} />
-        </IconButton>
-      </div>
-      <div className="run-facts">
-        {cmd && <code className="run-cmd">{cmd}</code>}
-        <div className="chips">
-          {commit && (
-            <span className={cx("ev", meta.git_dirty ? "warn" : undefined)} title={meta.git_dirty ? "启动时有未提交改动" : undefined}>
-              <GitCommitHorizontal size={11} />
-              {commit}
-              {meta.git_dirty ? " *" : ""}
+      <div className="panel-bar" data-back="">
+        <Button size="sm" variant="ghost" icon={<ArrowLeft size={ICON.sm} />} data-back="" onClick={onBack} title="回到运行列表">
+          运行
+        </Button>
+        <span className="mono clip-start run-id" title={runId}>
+          <bdi>{runId}</bdi>
+        </span>
+        <span className="run-meta-line" title={metaTitle} data-run-meta="">
+          {st.kind === "live" && <Dot tone="live" label="进行中" />}
+          <span className={st.kind === "failed" ? "tone-err" : undefined}>{st.label}</span>
+          <span className="dot-sep">{kind.label}</span>
+          {run?.started_at && (
+            <span className="dot-sep">
+              <When iso={run.started_at} />
             </span>
           )}
-          {preregPaths(meta).map((p, i) => {
-            // meta.prereg[].path 相对仓库根（不在仓库里时为绝对路径，rk.py 的 run 记录）；旧服务端没有 repo_prefix 时，
-            // 退而按研究目录下的 prereg/… 找。都经路径出口，和其他出处一致（审查 P4F2-02）。
-            const tail = /(?:^|\/)(prereg\/[^/].*)$/.exec(p);
-            const rel = previewPath(p, "repo", paths) ?? (tail ? previewPath(tail[1], "home", paths) : null);
-            return rel ? (
-              <button key={i} type="button" className="ev file" onClick={() => onFile(rel)} title={p}>
-                <FileText size={10} />
-                {p.split("/").pop()}
-              </button>
-            ) : (
-              <span key={i} className="ev text" title={p}>
-                {p.split("/").pop()}
-              </span>
-            );
-          })}
-          {run?.started_at && <span className="ev text">{relTime(run.started_at)}</span>}
-          {typeof meta.host === "string" && <span className="ev text">{meta.host}</span>}
+          {dur && <span className="dot-sep">{dur}</span>}
+        </span>
+        <IconButton label="引用到消息" size="sm" onClick={() => onQuote({ path: `${home}/runs/${runId}` })}>
+          <Quote size={ICON.sm} />
+        </IconButton>
+      </div>
+      <Tabs<RunTab>
+        label="运行详情"
+        data-tabs="run"
+        value={tab}
+        onChange={setTab}
+        items={[
+          { value: "log", label: "日志" },
+          { value: "metrics", label: "指标", count: metrics.length || null },
+          { value: "result", label: "结果页" },
+          { value: "env", label: "环境" },
+          { value: "inputs", label: "输入", count: inputs?.length || null },
+          { value: "outputs", label: "输出", count: outputs.value?.files.length || null },
+          { value: "meta", label: "元数据" },
+        ]}
+      />
+      {err && (
+        <div className="panel-notices">
+          <Notice tone="err">{err}</Notice>
         </div>
-      </div>
-      <div className="panel-bar tabs-scroll" onFocus={revealTab}>
-        <Segmented
-          value={tab}
-          onChange={setTab}
-          options={[
-            { value: "log", label: "日志" },
-            { value: "metrics", label: `指标${metrics.length ? ` ${metrics.length}` : ""}` },
-            { value: "result", label: "结果页" },
-            { value: "env", label: "环境" },
-            { value: "inputs", label: `输入${inputs?.length ? ` ${inputs.length}` : ""}` },
-            { value: "outputs", label: `输出${outputs.value?.files.length ? ` ${outputs.value.files.length}` : ""}` },
-            { value: "meta", label: "元数据" },
-          ]}
-        />
-      </div>
-      {err && <div className="note err">{err}</div>}
-      <div
-        className="scroll grow"
+      )}
+      <ScrollArea
+        className="panel-body"
+        data-body="run"
         onScroll={(e) => {
           const el = e.currentTarget;
           stick.current = el.scrollHeight - el.scrollTop - el.clientHeight < 24;
         }}
       >
-        {!d && !err && <Empty title={<Spinner />} />}
+        {!d && !err && <Loading />}
         {d && tab === "log" && (d.log_tail.trim() ? <pre ref={logRef} className="log">{d.log_tail}</pre> : <Empty title="没有日志" />)}
         {d &&
           tab === "metrics" &&
           (metrics.length === 0 ? (
             <Empty title="没有 metrics.json" />
           ) : (
-            <table className="table data">
+            <Table density="panel" className="data-tbl">
               <tbody>
                 {metrics.map(([k, v]) => (
                   <tr key={k}>
@@ -511,14 +488,64 @@ function RunView({ session, runId, run, home, paths, tab, setTab, onBack, onQuot
                   </tr>
                 ))}
               </tbody>
-            </table>
+            </Table>
           ))}
-        {d && tab === "result" && (d.result_md?.trim() ? <div className="pad"><Markdown text={d.result_md} images="link" /></div> : <Empty title="没有结果页" />)}
+        {d &&
+          tab === "result" &&
+          (d.result_md?.trim() ? (
+            <div className="pad">
+              <Markdown text={d.result_md} images="link" />
+            </div>
+          ) : (
+            <Empty title="没有结果页" />
+          ))}
         {d && tab === "env" && <EnvView env={env.value} bad={env.bad} meta={meta} live={live} />}
         {d && tab === "inputs" && <InputsView inputs={inputs} meta={meta} paths={paths} onFile={onFile} />}
         {d && tab === "outputs" && <OutputsView outputs={outputs.value} bad={outputs.bad} meta={meta} live={live} paths={paths} onFile={onFile} />}
-        {d && tab === "meta" && <pre className="log">{JSON.stringify(d.meta, null, 2)}</pre>}
-      </div>
+        {d && tab === "meta" && (
+          <div className="pad stack" data-run-facts="">
+            {/* 命令、提交、预登记、主机：原来顶部的事实芯片，放到元数据页（设计稿 5.2：顶部不再用事实芯片） */}
+            <Facts>
+              <Fact label="命令">{cmd ? <code className="cmd-text">{cmd}</code> : <span className="muted">—</span>}</Fact>
+              <Fact label="提交">
+                {commit ? (
+                  <span title={meta.git_dirty ? "启动时有未提交改动" : undefined}>
+                    <span className="mono">{commit}</span>
+                    {meta.git_dirty ? <span className="tone-warn"> · 启动时有未提交改动</span> : null}
+                  </span>
+                ) : (
+                  <span className="muted">—</span>
+                )}
+              </Fact>
+              <Fact label="预登记">
+                {preregPaths(meta).length === 0 ? (
+                  <span className="muted">—</span>
+                ) : (
+                  <div className="chips">
+                    {preregPaths(meta).map((p, i) => {
+                      // meta.prereg[].path 相对仓库根（不在仓库里时为绝对路径，rk.py 的 run 记录）；旧服务端没有 repo_prefix 时，
+                      // 退而按研究目录下的 prereg/… 找。都经路径出口，和其他出处一致（审查 P4F2-02）。
+                      const tail = /(?:^|\/)(prereg\/[^/].*)$/.exec(p);
+                      const rel = previewPath(p, "repo", paths) ?? (tail ? previewPath(tail[1], "home", paths) : null);
+                      return (
+                        <EvChip key={i} kind={rel ? "file" : "text"} onClick={rel ? () => onFile(rel) : undefined} title={p}>
+                          {p.split("/").pop()}
+                        </EvChip>
+                      );
+                    })}
+                  </div>
+                )}
+              </Fact>
+              {typeof meta.host === "string" && (
+                <Fact label="主机">
+                  <span className="mono">{meta.host}</span>
+                </Fact>
+              )}
+            </Facts>
+            <pre className="log surface-well">{JSON.stringify(d.meta, null, 2)}</pre>
+          </div>
+        )}
+      </ScrollArea>
     </div>
   );
 }

@@ -1,17 +1,25 @@
-import { PanelLeftOpen, Plus } from "lucide-react";
+import { KeyRound, PanelLeftOpen, Plus, Unplug } from "lucide-react";
 import { useEffect, useState } from "react";
 import { ErrorBoundary } from "./components/ErrorBoundary";
-import { Palette } from "./components/Palette";
+import { Palette, type PalettePick } from "./components/Palette";
 import { Sidebar } from "./components/Sidebar";
-import { Button, cx, IconButton, Logo, Spinner, Toasts, Tooltip } from "./components/ui";
+import { Button, cx, Empty, ICON, IconButton, Loading, Toasts, Tooltip } from "./components/ui";
 import { loadLocal, saveLocal } from "./lib/format";
-import { go, useRoute } from "./lib/route";
+import { currentRoute, go, useRoute } from "./lib/route";
+import { listed, showsSplit } from "./lib/split";
+import { closePicker, openInSplit, requestKeyboardFocus, splitAction, splitShortcut, syncRoute, useSplit } from "./lib/splitStore";
 import { useApp } from "./lib/store";
 import { ProjectPage, Projects } from "./pages/Projects";
 import { Servers } from "./pages/Servers";
 import { SessionView } from "./pages/SessionView";
+import { SplitView } from "./pages/SplitView";
 import { Settings } from "./pages/Settings";
 import { Welcome } from "./pages/Welcome";
+
+const PICK: Record<"right" | "below", PalettePick> = {
+  right: { title: "在右边打开对话", placeholder: "选一个对话，在右边打开…", onPick: (id) => openInSplit(id, "right") },
+  below: { title: "在下方打开对话", placeholder: "选一个对话，在焦点格下方打开…", onPick: (id) => openInSplit(id, "below") },
+};
 
 function applyTheme(theme: "dark" | "light" | "system") {
   const resolved = theme === "system" ? (window.matchMedia("(prefers-color-scheme: light)").matches ? "light" : "dark") : theme;
@@ -28,6 +36,12 @@ export function App() {
   const route = useRoute();
   const [collapsed, setCollapsed] = useState(() => loadLocal("bunsen.sidebar.collapsed", false));
   const [palette, setPalette] = useState(false);
+  // 网格里有两个以上会话时会话页是分屏；只剩一个时就是原来的单会话页。地址里的会话不在会话列表里时也是单会话页
+  // （“找不到这个对话”），布局不动（分屏稿 14.2，规则在 split.ts 的 showsSplit）
+  const layout = useSplit((s) => s.layout);
+  const routeListed = useApp((s) => route.name === "session" && listed(s.sessions)(route.id));
+  const picker = useSplit((s) => s.picker);
+  const split = route.name === "session" && showsSplit(layout, route.id, () => routeListed);
 
   useEffect(() => {
     void init();
@@ -70,6 +84,25 @@ export function App() {
     };
   }, [boot]);
 
+  // 分屏快捷键（Ctrl+Mod+…，Mod 在 macOS 是 Cmd、其他系统是 Alt）：在 window 上捕获，终端聚焦时也生效（终端那边也把它们截下）。
+  // 只在动作此刻有效时截：只有一格时的切换焦点和关闭、对话框或命令面板开着、输入法组合中，按键原样往下传（分屏稿 12.4）
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      const a = splitShortcut(e);
+      if (!a) return;
+      e.preventDefault();
+      e.stopPropagation();
+      splitAction(a);
+    };
+    window.addEventListener("keydown", onKey, true);
+    return () => window.removeEventListener("keydown", onKey, true);
+  }, []);
+
+  // 布局里的会话跟着地址走（启动时地址里已经是某个会话）
+  useEffect(() => {
+    if (boot === "ready") syncRoute();
+  }, [boot]);
+
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (!(e.metaKey || e.ctrlKey) || e.altKey) return;
@@ -93,26 +126,31 @@ export function App() {
     });
   };
 
+  // 启动加载、连不上、缺令牌都用同一个空状态：标题说发生了什么，说明说怎么办。
   if (boot === "loading") {
     return (
-      <div className="splash">
-        <Logo size={28} />
-        <Spinner />
+      <div className="boot">
+        <Loading hint="正在连接 Bunsen 服务…" />
       </div>
     );
   }
 
   if (boot !== "ready") {
+    const noToken = boot === "unauthorized";
     return (
-      <div className="splash">
-        <Logo size={28} />
-        <h1>{boot === "unauthorized" ? "缺少访问令牌" : "连不上 Bunsen 服务"}</h1>
-        <p>
-          {boot === "unauthorized"
-            ? "用 bunsen serve 打印的地址打开（带 #token=…）。"
-            : (bootDetail ?? "确认 bunsen serve 还在运行。")}
-        </p>
-        <Button onClick={() => void init()}>重试</Button>
+      <div className="boot">
+        <Empty
+          icon={noToken ? <KeyRound size={ICON.lg} /> : <Unplug size={ICON.lg} />}
+          title={noToken ? "缺少访问令牌" : "连不上 Bunsen 服务"}
+          hint={
+            <>
+              {noToken ? "用 bunsen serve 打印的地址打开（带 #token=…）。" : "确认 bunsen serve 还在运行，然后重试。"}
+              {bootDetail && <div className="muted">{bootDetail}</div>}
+            </>
+          }
+        >
+          <Button onClick={() => void init()}>重试</Button>
+        </Empty>
       </div>
     );
   }
@@ -125,18 +163,19 @@ export function App() {
           {collapsed && (
             <div className="rail">
               <IconButton label="展开侧栏" side="right" onClick={toggleSidebar}>
-                <PanelLeftOpen size={15} />
+                <PanelLeftOpen size={ICON.md} />
               </IconButton>
               <IconButton label="新对话" side="right" onClick={() => go("/")}>
-                <Plus size={15} />
+                <Plus size={ICON.md} />
               </IconButton>
             </div>
           )}
           <div className="main-body">
             {/* 一页出错只换掉这一页，侧栏还在；换页（key 变了）就重新渲染 */}
-            <ErrorBoundary page key={route.name === "session" || route.name === "project" ? `${route.name}:${route.id}` : route.name}>
+            {/* 分屏时 key 固定，切换焦点不重挂网格；单会话页照旧按会话重置 */}
+            <ErrorBoundary page key={split ? "split" : route.name === "session" || route.name === "project" ? `${route.name}:${route.id}` : route.name}>
               {route.name === "new" && <Welcome />}
-              {route.name === "session" && <SessionView key={route.id} id={route.id} />}
+              {route.name === "session" && (split ? <SplitView focus={route.id} /> : <SessionView key={route.id} id={route.id} />)}
               {route.name === "projects" && <Projects />}
               {route.name === "project" && <ProjectPage key={route.id} id={route.id} />}
               {route.name === "servers" && <Servers />}
@@ -146,6 +185,17 @@ export function App() {
         </main>
       </div>
       <Palette open={palette} onOpenChange={setPalette} />
+      {/* Ctrl+Mod+\、Ctrl+Mod+-：复用命令面板选一个会话，开在右边或焦点格下面 */}
+      <Palette
+        open={picker !== null}
+        onOpenChange={(v) => {
+          if (v) return;
+          closePicker();
+          const r = currentRoute();
+          if (r.name === "session") requestKeyboardFocus(r.id);
+        }}
+        pick={picker ? PICK[picker] : undefined}
+      />
       <Toasts />
     </Tooltip.Provider>
   );

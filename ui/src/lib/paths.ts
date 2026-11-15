@@ -120,3 +120,22 @@ export function previewPath(path: unknown, base: PathBase, ctx: PathCtx): string
   if (!segs || segs.length === 0 || segs[0].startsWith("~")) return null;
   return segs.join("/");
 }
+
+/** 路径里有没有首尾带空白、含控制字符的段（预览出口一律拒绝的那一类，审查 P4F2-01）。 */
+export function hasBadSegment(path: string): boolean {
+  return path.split("/").some((s) => s !== "" && !segOk(s));
+}
+
+/**
+ * 被拒绝的路径以文字显示时写成看得见的形式（第四期前端遗留，界面统一 5.6）：HTML 会把空白合并掉，
+ * “\t/etc/shadow” 看起来就是 “/etc/shadow”。控制字符和不换行空格这类写成 \t、\n、\u0085、\u00a0，首尾有空白时整串加引号。
+ */
+export function visiblePath(path: string): string {
+  const esc = path.replace(/[\u0000-\u001f\u007f-\u00a0\u1680\u2000-\u200b\u2028\u2029\u202f\u205f\u3000\ufeff]/g, (c) =>
+    c === "\t" ? "\\t" : c === "\n" ? "\\n" : c === "\r" ? "\\r" : `\\u${c.charCodeAt(0).toString(16).padStart(4, "0")}`,
+  );
+  return path.split("/").some((s) => s !== s.trim()) ? `"${esc}"` : esc;
+}
+
+/** 不能预览时的悬停说明。 */
+export const BAD_SEGMENT_WHY = "首尾有空白或含控制字符，不能预览";

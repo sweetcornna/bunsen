@@ -1,20 +1,37 @@
 // 研究面板、可信度页、运行详情共用的小工具。
-import type { Tone } from "../components/ui";
+import type { BadgeTone } from "../components/ui";
 import { hasKey } from "./format";
 import type { ResearchTrust, RkAuditVerdict, RkCheck, RkCiteReport, RkCiteStatus, RkClaim, RkEnv, RkInput, RkIssue, RkOpenFail, RkOutputs, RkPlanStatus, RkReviewStatus, TrustCommand } from "./api";
 
-export const runTone = (state: string): Tone => (/run|queue|wait/i.test(state) ? "accent" : /fail|error|kill|timeout|lost/i.test(state) ? "err" : /done|ok|success/i.test(state) ? "ok" : "mute");
-export const claimTone = (s: string): Tone => (s.includes("证实") ? "ok" : s.includes("否定") ? "err" : s.includes("未决") ? "warn" : "mute");
+/**
+ * 运行状态的词表（设计稿第 4 节）：进行中（live 点）/ 成功（中性）/ 失败（退出码 N）（err 字）/ 已取消（中性）/ 未知（muted）。
+ * 研究工具和项目视图给的是英文状态值（running、done、failed、open、ok…），界面上一律换成这里的中文。
+ */
+export type RunStatus = { label: string; kind: "live" | "ok" | "failed" | "cancelled" | "unknown" };
+export function runStatus(state: string | null | undefined, exit?: number | null): RunStatus {
+  const s = state ?? "";
+  if (/run|queue|wait|open|pending|start/i.test(s)) return { label: "进行中", kind: "live" };
+  if (/cancel|kill|abort|stopp?ed/i.test(s)) return { label: "已取消", kind: "cancelled" };
+  if (/fail|error|timeout|lost/i.test(s)) return { label: typeof exit === "number" && exit !== 0 ? `失败（退出码 ${exit}）` : "失败", kind: "failed" };
+  if (/done|^ok$|success|finish|complete/i.test(s)) return { label: "成功", kind: "ok" };
+  return { label: "未知", kind: "unknown" };
+}
+export const isLiveRun = (state: string | null | undefined) => runStatus(state).kind === "live";
 
-/** 结论的可信度（rk check 的 claims[].trust）。 */
-export const TRUST: Record<RkClaim["trust"], { tone: Tone; label: string }> = {
-  ok: { tone: "ok", label: "可信" },
+/** 运行类型：预登记用中性徽标，探索用 muted 文字。 */
+export const runKind = (kind: string | null | undefined): { label: string; prereg: boolean } =>
+  kind === "prereg" ? { label: "预登记", prereg: true } : kind === "explore" ? { label: "探索", prereg: false } : { label: kind ? "其他" : "未知", prereg: false };
+
+/** 结论的可信度（rk check 的 claims[].trust）：可信用中性色（不显示徽标），存疑 warn，不可信 err。 */
+export const TRUST: Record<RkClaim["trust"], { tone: BadgeTone; label: string }> = {
+  ok: { tone: "neutral", label: "可信" },
   warn: { tone: "warn", label: "存疑" },
   fail: { tone: "err", label: "不可信" },
 };
 
 const AUDIT_RANK: Record<RkAuditVerdict, number> = { 可采信: 1, 需退回: 2, 不可采信: 3 };
-export const auditTone = (v: RkAuditVerdict | null): Tone => (v === "可采信" ? "ok" : v === "需退回" ? "warn" : v === "不可采信" ? "err" : "mute");
+/** 推断审计的语气：可采信中性，需退回 warn，不可采信 err；没有总评为 null（muted）。 */
+export const auditTone = (v: RkAuditVerdict | null): BadgeTone | null => (v === "可采信" ? "neutral" : v === "需退回" ? "warn" : v === "不可采信" ? "err" : null);
 
 /** 证据运行里最严的推断审计总评；没有任何总评为 null（界面上记“未审”）。unaudited：没有总评的证据运行数。 */
 export function strictestAudit(runs: RkClaim["runs"]): { verdict: RkAuditVerdict | null; unaudited: number } {

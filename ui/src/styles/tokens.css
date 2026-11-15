@@ -1,111 +1,233 @@
-/* 设计令牌。参照对 Claude Desktop 的分析：暖灰分层、单色边框按透明度分档、蓝色只表示交互、
-   暖色只给主要动作。字体用系统字体栈，标题语气用系统衬线。 */
+/* 设计令牌（.orchestra/design-ui-unify.md 第 1 节）。按角色命名，只用这里的值：
+   字号、间距、控件高、圆角、颜色、阴影、动效都不在组件样式里写字面量（ui/scripts/check-style.ts 检查）。
+   颜色：大面积中性暖灰；蓝色只表示能点、选中、聚焦；状态色只给异常；品牌橙只给 Logo 和欢迎页发送按钮。 */
 :root {
   --font-ui: -apple-system, BlinkMacSystemFont, "SF Pro Text", system-ui, "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", "Segoe UI", sans-serif;
   --font-serif: ui-serif, "New York", "Iowan Old Style", Georgia, "Songti SC", "Noto Serif CJK SC", serif;
   --font-mono: ui-monospace, "SF Mono", SFMono-Regular, Menlo, Monaco, Consolas, "PingFang SC", monospace;
 
-  --fs-xs: 11px;
-  --fs-sm: 12px;
-  --fs-md: 13px;
-  --fs-lg: 15px;
-  --fs-xl: 22px;
+  /* 字号 / 行高：每个角色两项一起用（工具类 .t-*） */
+  --fs-badge: 12px;   --lh-badge: 16px;
+  --fs-meta: 12px;    --lh-meta: 16px;
+  --fs-dense: 13px;   --lh-dense: 18px;
+  --lh-code: 19px;
+  --fs-body: 14px;    --lh-body: 20px;
+  --fs-heading: 15px; --lh-heading: 20px;
+  --fs-read: 16px;    --lh-read: 24px;
+  --fs-title: 22px;   --lh-title: 28px;
+  --fs-hero: 28px;    --lh-hero: 36px;
+  --fw-regular: 400;
+  --fw-medium: 500;
+  --fw-semibold: 600;
+  --ls-tight: -0.01em;
 
-  --r-sm: 4px;
-  --r-md: 6px;
-  --r-lg: 10px;
-  --r-xl: 14px;
+  /* 间距 */
+  --sp-0_5: 2px;
+  --sp-1: 4px;
+  --sp-1_5: 6px;
+  --sp-2: 8px;
+  --sp-2_5: 10px;
+  --sp-3: 12px;
+  --sp-4: 16px;
+  --sp-5: 20px;
+  --sp-6: 24px;
+  --sp-8: 32px;
+  --sp-10: 40px;
 
-  --sidebar-w: 256px;
-  --ease: cubic-bezier(0.165, 0.84, 0.44, 1);
+  /* 尺寸 */
+  --h-xs: 20px;
+  --h-sm: 24px;
+  --h-md: 28px;
+  --h-lg: 40px;
+  --row: 32px;
+  --row-table: 36px;
+  --bar: 48px;
+  --bar-sub: 40px;
+  --bar-pane: 32px;
+  --page-w: 920px;
+  --field-w: 480px;
+  --sidebar-w: 272px;
+  --fade: 16px;
+  --fade-text: 24px;
+  --dot: 6px;
+  /* “有新输出”的环：空心，比实心点大一档，环内留出 4px */
+  --dot-ring: 8px;
+  --dialog-sm: 400px;
+  --dialog-md: 520px;
+  --dialog-lg: 720px;
+
+  /* 圆角 */
+  --rd-inline: 4px;
+  --rd-badge: 6px;
+  --rd-control: 8px;
+  --rd-card: 12px;
+  --rd-composer: 14px;
+  --rd-full: 999px;
+
+  /* 动效 */
+  --dur-hover: 60ms;
+  --dur-reveal: 120ms;
+  --dur-expand: 200ms;
+  --dur-sheet: 300ms;
+  --delay-reveal: 100ms;
+  --ease-out: cubic-bezier(0.165, 0.84, 0.44, 1);
   --ease-snap: cubic-bezier(0.32, 0.72, 0, 1);
-  --fast: 120ms;
-  --base: 200ms;
+
+  /* 遮罩渐变里的不透明色（mask-image 只看 alpha） */
+  --mask: #000;
+}
+
+/* 粗指针（触屏）：默认控件和侧栏行加高 */
+@media (pointer: coarse) {
+  :root {
+    --h-md: 32px;
+    --row: 40px;
+  }
 }
 
 :root,
 :root[data-theme="dark"] {
   color-scheme: dark;
   --edge: 51 16.5% 84.5%;
-  --bg-app: hsl(30 3.3% 11.8%);
-  --bg-0: hsl(60 2.7% 14.5%);
-  --bg-1: hsl(60 2.4% 16.4%);
-  --bg-2: hsl(60 2.1% 18.4%);
-  --bg-3: hsl(60 2% 21.5%);
-  --bg-4: hsl(60 2% 25%);
-  --sunken: hsl(60 2.6% 10.5%);
-  --tint: hsl(var(--edge) / 0.04);
-  --tint-strong: hsl(var(--edge) / 0.08);
-  --line-faint: hsl(var(--edge) / 0.07);
-  --line: hsl(var(--edge) / 0.11);
+
+  --bg-page: hsl(30 3.3% 10.4%);
+  --bg-surface: hsl(60 2.7% 14.5%);
+  --bg-raised: hsl(60 2.4% 17.6%);
+  --bg-float: hsl(60 2.1% 18.2%);
+  --bg-sunken: hsl(60 2.6% 11.6%);
+
+  --fg-primary: hsl(48 33.3% 97.1%);
+  --fg-secondary: hsl(50 9% 74%);
+  --fg-muted: hsl(48 4.8% 67%);
+  --fg-disabled: hsl(48 33.3% 97.1% / 0.35);
+
+  --fill-hover: hsl(var(--edge) / 0.05);
+  --fill-selected: hsl(var(--edge) / 0.1);
+  --fill-control: hsl(var(--edge) / 0.1);
+  --fill-control-hover: hsl(var(--edge) / 0.15);
+
+  --line-faint: hsl(var(--edge) / 0.05);
+  --line: hsl(var(--edge) / 0.1);
   --line-strong: hsl(var(--edge) / 0.2);
-  --fg-0: hsl(48 33.3% 97.1%);
-  --fg-1: hsl(50 9% 73.7%);
-  --fg-2: hsl(48 4.8% 59.2%);
-  --fg-on-accent: #ffffff;
+
   --accent: hsl(210 70.9% 51.6%);
-  --accent-hover: hsl(210 70.9% 57%);
-  --accent-text: hsl(210 65.5% 67.1%);
-  --accent-soft: hsl(210 70.9% 51.6% / 0.16);
-  --accent-line: hsl(210 70.9% 51.6% / 0.6);
+  --accent-text: hsl(210 80% 72%);
+  --accent-soft: hsl(210 70.9% 51.6% / 0.18);
+
+  --btn-primary-bg: var(--fg-primary);
+  --btn-primary-fg: var(--bg-surface);
+  --btn-primary-hover: hsl(48 12% 84%);
+  --danger-bg: hsl(0 62% 47%);
+  --danger-hover: hsl(0 62% 42%);
+  --danger-fg: hsl(0 0% 100%);
+
   --brand: hsl(15 63.1% 59.6%);
-  --brand-hover: hsl(15 54.2% 51.2%);
-  --ok: hsl(97 59.1% 52%);
-  --ok-soft: hsl(97 59.1% 46.1% / 0.14);
-  --warn: hsl(40 96% 58%);
+  --brand-hover: hsl(15 54.2% 53%);
+  --on-brand: hsl(0 0% 100%);
+
+  --ok-text: hsl(97 45% 64%);
+  --ok-soft: hsl(97 59% 46% / 0.14);
+  --ok-line: hsl(97 45% 52%);
+  --warn-text: hsl(40 92% 63%);
   --warn-soft: hsl(40 96% 54% / 0.13);
-  --err: hsl(0 90% 73%);
+  --warn-line: hsl(40 90% 55%);
+  --err-text: hsl(0 88% 76%);
   --err-soft: hsl(0 67% 59.6% / 0.16);
-  --overlay: rgba(0, 0, 0, 0.5);
-  --shadow-card: 0 0 0 1px hsl(var(--edge) / 0.1), 0 4px 20px rgba(0, 0, 0, 0.18);
-  --shadow-panel: 0 0 0 1px hsl(var(--edge) / 0.08);
-  --pop-shadow: 0 0 0 1px hsl(var(--edge) / 0.14), 0 8px 24px rgba(0, 0, 0, 0.32), 0 2px 6px rgba(0, 0, 0, 0.2);
-  --term-bg: hsl(60 2.7% 14.5%);
+  --err-line: hsl(0 75% 63%);
+
+  --focus-ring: 0 0 0 1px var(--bg-surface), 0 0 0 3px var(--accent);
+  --focus-ring-inset: inset 0 0 0 2px var(--accent);
+  /* tooltip 反色（统一稿第 2 节）：深色主题近白底、深字 */
+  --tip-bg: var(--fg-primary);
+  --tip-fg: var(--bg-surface);
+  --overlay: hsl(0 0% 0% / 0.5);
+  --selection: hsl(210 70.9% 51.6% / 0.32);
+
+  --ring: 0 0 0 1px var(--line);
+  --ring-strong: 0 0 0 1px var(--line-strong);
+  --ring-err: 0 0 0 1px var(--err-line);
+  --shadow-field: var(--ring), 0 1px 2px hsl(0 0% 0% / 0.2);
+  --shadow-float: 0 0 0 1px hsl(var(--edge) / 0.12), 0 8px 24px hsl(0 0% 0% / 0.32), 0 2px 6px hsl(0 0% 0% / 0.2);
+
+  /* 终端是 sunken 表面（统一稿 1.5） */
+  --term-bg: var(--bg-sunken);
   --term-fg: hsl(48 20% 90%);
+  --term-sel: hsl(210 80% 60% / 0.32);
   --scroll: hsl(var(--edge) / 0.16);
   --scroll-hover: hsl(var(--edge) / 0.28);
   --checker: hsl(60 2% 19%);
+  --thumb-filter: brightness(0.9);
+  --white: hsl(0 0% 100%);
 }
 
 :root[data-theme="light"] {
   color-scheme: light;
   --edge: 30 3.3% 11.8%;
-  --bg-app: hsl(53 28.6% 94.5%);
-  --bg-0: hsl(48 33.3% 97.1%);
-  --bg-1: hsl(48 30% 98.4%);
-  --bg-2: #ffffff;
-  --bg-3: hsl(48 25% 92.2%);
-  --bg-4: hsl(50 20.7% 88.6%);
-  --sunken: hsl(53 28.6% 94.5%);
-  --tint: hsl(var(--edge) / 0.035);
-  --tint-strong: hsl(var(--edge) / 0.07);
-  --line-faint: hsl(var(--edge) / 0.07);
-  --line: hsl(var(--edge) / 0.12);
-  --line-strong: hsl(var(--edge) / 0.22);
-  --fg-0: hsl(60 2.6% 7.6%);
-  --fg-1: hsl(60 2.5% 23.3%);
-  --fg-2: hsl(51 3.1% 43.7%);
-  --fg-on-accent: #ffffff;
+
+  --bg-page: hsl(45 14% 92.6%);
+  --bg-surface: hsl(0 0% 100%);
+  --bg-raised: hsl(0 0% 100%);
+  --bg-float: hsl(0 0% 100%);
+  --bg-sunken: hsl(45 20% 96.5%);
+
+  --fg-primary: hsl(60 2.6% 7.6%);
+  --fg-secondary: hsl(60 2.5% 22%);
+  --fg-muted: hsl(50 3% 35%);
+  --fg-disabled: hsl(60 2.6% 7.6% / 0.35);
+
+  --fill-hover: hsl(var(--edge) / 0.05);
+  --fill-selected: hsl(var(--edge) / 0.1);
+  --fill-control: hsl(var(--edge) / 0.1);
+  --fill-control-hover: hsl(var(--edge) / 0.15);
+
+  --line-faint: hsl(var(--edge) / 0.05);
+  --line: hsl(var(--edge) / 0.1);
+  --line-strong: hsl(var(--edge) / 0.2);
+
   --accent: hsl(210 70.9% 51.6%);
-  --accent-hover: hsl(210 73.7% 44%);
-  --accent-text: hsl(210 73.7% 40.2%);
+  --accent-text: hsl(210 73.7% 38%);
   --accent-soft: hsl(210 70.9% 51.6% / 0.11);
-  --accent-line: hsl(210 70.9% 51.6% / 0.55);
+
+  --btn-primary-bg: var(--fg-primary);
+  --btn-primary-fg: var(--bg-surface);
+  --btn-primary-hover: hsl(60 2.5% 24%);
+  --danger-bg: hsl(0 62% 44%);
+  --danger-hover: hsl(0 62% 38%);
+  --danger-fg: hsl(0 0% 100%);
+
   --brand: hsl(15 54.2% 51.2%);
   --brand-hover: hsl(15 56% 45%);
-  --ok: hsl(103 72.3% 26.9%);
-  --ok-soft: hsl(103 72.3% 26.9% / 0.1);
-  --warn: hsl(36 100% 30%);
-  --warn-soft: hsl(36 100% 36% / 0.11);
-  --err: hsl(0 56.2% 45.4%);
-  --err-soft: hsl(0 56.2% 45.4% / 0.09);
-  --overlay: rgba(20, 20, 19, 0.28);
-  --shadow-card: 0 0 0 1px hsl(var(--edge) / 0.1), 0 4px 20px rgba(0, 0, 0, 0.05);
-  --shadow-panel: 0 0 0 1px hsl(var(--edge) / 0.09);
-  --pop-shadow: 0 0 0 1px hsl(var(--edge) / 0.12), 0 8px 24px rgba(0, 0, 0, 0.12), 0 2px 6px rgba(0, 0, 0, 0.08);
-  --term-bg: hsl(48 33.3% 97.1%);
+  --on-brand: hsl(0 0% 100%);
+
+  --ok-text: hsl(103 72% 23%);
+  --ok-soft: hsl(103 72% 27% / 0.1);
+  --ok-line: hsl(103 45% 40%);
+  --warn-text: hsl(34 100% 26%);
+  --warn-soft: hsl(36 100% 40% / 0.12);
+  --warn-line: hsl(38 92% 45%);
+  --err-text: hsl(0 62% 40%);
+  --err-soft: hsl(0 56% 45% / 0.09);
+  --err-line: hsl(0 65% 52%);
+
+  --focus-ring: 0 0 0 1px var(--bg-surface), 0 0 0 3px var(--accent);
+  --focus-ring-inset: inset 0 0 0 2px var(--accent);
+  --tip-bg: var(--fg-primary);
+  --tip-fg: var(--bg-surface);
+  --overlay: hsl(30 5% 8% / 0.32);
+  --selection: hsl(210 70.9% 51.6% / 0.22);
+
+  --ring: 0 0 0 1px var(--line);
+  --ring-strong: 0 0 0 1px var(--line-strong);
+  --ring-err: 0 0 0 1px var(--err-line);
+  --shadow-field: var(--ring), 0 1px 2px hsl(0 0% 0% / 0.05);
+  --shadow-float: 0 0 0 1px hsl(var(--edge) / 0.1), 0 8px 24px hsl(0 0% 0% / 0.12), 0 2px 6px hsl(0 0% 0% / 0.08);
+
+  --term-bg: var(--bg-sunken);
   --term-fg: hsl(60 2.6% 12%);
+  --term-sel: hsl(220 90% 56% / 0.22);
   --scroll: hsl(var(--edge) / 0.18);
   --scroll-hover: hsl(var(--edge) / 0.3);
   --checker: hsl(48 20% 90%);
+  --thumb-filter: none;
+  --white: hsl(0 0% 100%);
 }

@@ -1,6 +1,6 @@
 import { ExternalLink, FlaskConical, Monitor, Moon, Pencil, RotateCcw, Sun } from "lucide-react";
 import { useEffect, useState } from "react";
-import { AgentMark, Button, Field, Modal, Picker, Segmented } from "../components/ui";
+import { AgentMark, Badge, Button, Dialog, EmptyLine, Fact, Facts, Field, ICON, IconButton, Page, Picker, Row, Section, Segmented, Tip } from "../components/ui";
 import { api, type Agent, type Settings as SettingsT } from "../lib/api";
 import { serverAddr } from "../lib/format";
 import { useApp } from "../lib/store";
@@ -20,145 +20,151 @@ export function Settings() {
   if (!settings) return null;
 
   return (
-    <div className="page">
-      <div className="page-inner narrow">
-        <header className="page-head">
-          <div>
-            <h1>设置</h1>
-          </div>
-        </header>
-
-        <section className="card">
-          <h3>外观</h3>
-          <div className="setting">
-            <div>
-              <b>主题</b>
-            </div>
-            <Segmented<SettingsT["theme"]>
-              value={settings.theme}
-              onChange={(theme) => void save({ theme })}
-              options={[
-                { value: "dark", label: <><Moon size={12} /> 深色</> },
-                { value: "light", label: <><Sun size={12} /> 浅色</> },
-                { value: "system", label: <><Monitor size={12} /> 跟随系统</> },
-              ]}
-            />
-          </div>
-        </section>
-
-        <section className="card">
-          <h3>默认值</h3>
-          <div className="setting">
-            <div>
-              <b>服务器</b>
-            </div>
-            <Picker
-              variant="field"
-              value={settings.default_server ?? "__last"}
-              onChange={(v) => void save({ default_server: v === "__last" ? null : v })}
-              placeholder="上次用的"
-              options={[{ value: "__last", label: "上次用的" }, ...servers.map((s) => ({ value: s.id, label: s.alias, hint: serverAddr(s) }))]}
-            />
-          </div>
-          <div className="setting">
-            <div>
-              <b>Agent</b>
-            </div>
-            <Picker
-              variant="field"
-              value={settings.default_agent ?? "__last"}
-              onChange={(v) => void save({ default_agent: v === "__last" ? null : v })}
-              placeholder="上次用的"
-              options={[{ value: "__last", label: "上次用的" }, ...agents.map((a) => ({ value: a.id, label: a.name, hint: a.vendor, left: <AgentMark id={a.id} name={a.name} /> }))]}
-            />
-          </div>
-          <div className="setting">
-            <div>
-              <b>状态刷新间隔</b>
-            </div>
-            <Picker
-              variant="field"
-              value={String(settings.status_interval_secs)}
-              onChange={(v) => void save({ status_interval_secs: Number(v) })}
-              placeholder="30 秒"
-              options={[15, 30, 60, 120, 300].map((n) => ({ value: String(n), label: n < 60 ? `${n} 秒` : `${n / 60} 分钟` }))}
-            />
-          </div>
-        </section>
-
-        <section className="card">
-          <h3>科研套件</h3>
-          <div className="agent-table">
-            {plugins.map((p) => (
-              <div key={p.name} className="agent-row">
-                <FlaskConical size={16} className="c-accent" />
-                <div className="agent-row-main">
-                  <div>
-                    <b>{p.name}</b> <span className="dim">{p.version}</span> <span className="tag">{p.source === "bundled" ? "内置" : "本机"}</span>
-                  </div>
-                  <code className="ellipsis">{[...p.skills, ...p.agents.map((a) => `@${a}`)].join(" · ")}</code>
-                </div>
+    <Page title="设置" data-page="settings">
+      <div className="sections">
+        <Section title="外观">
+          <div className="form-col">
+            {/* 分段控件不放进 label：点标签文字会触发第一个选项 */}
+            <div className="field-group">
+              <span className="field-label">主题</span>
+              <div>
+                <Segmented<SettingsT["theme"]>
+                  label="主题"
+                  value={settings.theme}
+                  onChange={(theme) => void save({ theme })}
+                  options={[
+                    { value: "dark", label: <><Moon size={ICON.sm} /> 深色</> },
+                    { value: "light", label: <><Sun size={ICON.sm} /> 浅色</> },
+                    { value: "system", label: <><Monitor size={ICON.sm} /> 跟随系统</> },
+                  ]}
+                />
               </div>
-            ))}
-            {plugins.length === 0 && <div className="agent-row dim">没有插件</div>}
-          </div>
-          <div className="setting col">
-            <div>
-              <b>用本机目录覆盖内置的 research</b>
-            </div>
-            <div className="row">
-              <input className="field mono grow" value={pluginPath} spellCheck={false} placeholder="/Users/你/project/research_plugin" onChange={(e) => setPluginPath(e.target.value)} />
-              <Button variant="primary" disabled={(pluginPath.trim() || null) === settings.research_plugin_path} onClick={() => void save({ research_plugin_path: pluginPath.trim() || null }).then(loadPlugins)}>
-                保存
-              </Button>
             </div>
           </div>
-        </section>
+        </Section>
 
-        <section className="card">
-          <h3>Agent</h3>
-          <div className="agent-table">
-            {agents.map((a) => (
-              <div key={a.id} className="agent-row">
-                <AgentMark id={a.id} name={a.name} size={22} />
-                <div className="agent-row-main">
-                  <div>
-                    <b>{a.name}</b> <span className="dim">{a.vendor}</span>
-                  </div>
-                  <code className="ellipsis">{a.launch}</code>
-                </div>
-                {a.docs_url && (
-                  <a className="icon-btn" href={a.docs_url} target="_blank" rel="noopener noreferrer" aria-label="文档">
-                    <ExternalLink size={13} />
-                  </a>
-                )}
-                <button type="button" className="icon-btn" aria-label={`编辑 ${a.name}`} onClick={() => setEditing(a)}>
-                  <Pencil size={13} />
-                </button>
-              </div>
-            ))}
+        <Section title="默认值">
+          <div className="form-col">
+            <Field label="服务器">
+              <Picker
+                variant="field"
+                value={settings.default_server ?? "__last"}
+                onChange={(v) => void save({ default_server: v === "__last" ? null : v })}
+                placeholder="上次用的"
+                options={[{ value: "__last", label: "上次用的" }, ...servers.map((s) => ({ value: s.id, label: s.alias, hint: serverAddr(s) }))]}
+              />
+            </Field>
+            <Field label="Agent">
+              <Picker
+                variant="field"
+                value={settings.default_agent ?? "__last"}
+                onChange={(v) => void save({ default_agent: v === "__last" ? null : v })}
+                placeholder="上次用的"
+                options={[{ value: "__last", label: "上次用的" }, ...agents.map((a) => ({ value: a.id, label: a.name, hint: a.vendor, left: <AgentMark id={a.id} name={a.name} /> }))]}
+              />
+            </Field>
+            <Field label="状态刷新间隔">
+              <Picker
+                variant="field"
+                value={String(settings.status_interval_secs)}
+                onChange={(v) => void save({ status_interval_secs: Number(v) })}
+                placeholder="30 秒"
+                options={[15, 30, 60, 120, 300].map((n) => ({ value: String(n), label: n < 60 ? `${n} 秒` : `${n / 60} 分钟` }))}
+              />
+            </Field>
           </div>
-          <div className="row">
-            <Button onClick={() => setEditing({ id: "", name: "", vendor: "", description: "", detect: "", launch: "", launch_with_prompt: null, resume: null, yolo_flag: null, plugin_dir_flag: null, install: [], auth_hint: "", docs_url: "", builtin: false })}>
+        </Section>
+
+        <Section title="科研套件" count={plugins.length}>
+          {plugins.length === 0 ? (
+            <EmptyLine>没有插件</EmptyLine>
+          ) : (
+            <div className="list">
+              {plugins.map((p) => (
+                <Row
+                  key={p.name}
+                  data-plugin={p.name}
+                  lead={<FlaskConical size={ICON.md} />}
+                  title={[...p.skills, ...p.agents.map((a) => `@${a}`)].join(" · ")}
+                  name={
+                    <>
+                      {p.name} <span className="muted">{p.version}</span> <Badge>{p.source === "bundled" ? "内置" : "本机"}</Badge>
+                    </>
+                  }
+                  meta={`${p.skills.length} 个技能 · ${p.agents.length} 个子代理`}
+                />
+              ))}
+            </div>
+          )}
+          <div className="form-col">
+            <Field label="用本机目录覆盖内置的 research" hint="留空就用内置的。保存后重新读取插件。">
+              <div className="row">
+                <input className="input mono grow" value={pluginPath} spellCheck={false} placeholder="/Users/你/project/research_plugin" onChange={(e) => setPluginPath(e.target.value)} />
+                <Button variant="primary" disabled={(pluginPath.trim() || null) === settings.research_plugin_path} onClick={() => void save({ research_plugin_path: pluginPath.trim() || null }).then(loadPlugins)}>
+                  保存
+                </Button>
+              </div>
+            </Field>
+          </div>
+        </Section>
+
+        <Section
+          title="Agent"
+          count={agents.length}
+          end={
+            <Button size="sm" variant="ghost" onClick={() => setEditing({ id: "", name: "", vendor: "", description: "", detect: "", launch: "", launch_with_prompt: null, resume: null, yolo_flag: null, plugin_dir_flag: null, install: [], auth_hint: "", docs_url: "", builtin: false })}>
               添加 Agent
             </Button>
+          }
+        >
+          <div className="list">
+            {agents.map((a) => (
+              <Row
+                key={a.id}
+                data-agent={a.id}
+                lead={<AgentMark id={a.id} name={a.name} />}
+                name={
+                  <>
+                    {a.name} <span className="muted">{a.vendor}</span>
+                  </>
+                }
+                meta={<span className="mono">{a.launch}</span>}
+                onClick={() => setEditing(a)}
+                tail={
+                  <>
+                    {a.docs_url && (
+                      <Tip label="文档">
+                        <a className="icon-button" data-size="sm" href={a.docs_url} target="_blank" rel="noopener noreferrer" aria-label="文档">
+                          <ExternalLink size={ICON.md} />
+                        </a>
+                      </Tip>
+                    )}
+                    <IconButton label={`编辑 ${a.name}`} size="sm" onClick={() => setEditing(a)}>
+                      <Pencil size={ICON.sm} />
+                    </IconButton>
+                  </>
+                }
+              />
+            ))}
           </div>
-        </section>
+        </Section>
 
         {meta && (
-          <section className="card">
-            <h3>关于</h3>
-            <dl className="facts">
-              <dt>版本</dt>
-              <dd>Bunsen {meta.version}{meta.dev ? "（开发模式）" : ""}</dd>
-              <dt>数据目录</dt>
-              <dd className="mono">{meta.data_dir}</dd>
-            </dl>
-          </section>
+          <Section title="关于">
+            <Facts>
+              <Fact label="版本">
+                Bunsen {meta.version}
+                {meta.dev ? "（开发模式）" : ""}
+              </Fact>
+              <Fact label="数据目录">
+                <span className="mono">{meta.data_dir}</span>
+              </Fact>
+            </Facts>
+          </Section>
         )}
       </div>
       {editing && <AgentForm agent={editing} onClose={() => setEditing(null)} />}
-    </div>
+    </Page>
   );
 }
 
@@ -218,7 +224,7 @@ function AgentForm({ agent, onClose }: { agent: Agent; onClose: () => void }) {
   };
 
   return (
-    <Modal
+    <Dialog
       open
       onOpenChange={(v) => !v && onClose()}
       size="lg"
@@ -227,7 +233,8 @@ function AgentForm({ agent, onClose }: { agent: Agent; onClose: () => void }) {
       footer={
         <>
           {!isNew && (
-            <Button variant={agent.builtin ? "default" : "danger"} icon={agent.builtin ? <RotateCcw size={13} /> : undefined} disabled={busy} onClick={() => void reset()}>
+            // 危险色只用在确认框（设计稿第 2 节）：这里用 ghost，删除自定义 Agent 写在文字上
+            <Button variant="ghost" icon={agent.builtin ? <RotateCcw size={ICON.md} /> : undefined} disabled={busy} onClick={() => void reset()}>
               {agent.builtin ? "还原默认" : "删除"}
             </Button>
           )}
@@ -242,43 +249,45 @@ function AgentForm({ agent, onClose }: { agent: Agent; onClose: () => void }) {
       }
     >
       <div className="form-grid">
-        <Field label="标识" >
-          <input className="field mono" {...text("id")} disabled={!isNew} placeholder="my-agent" />
+        <Field label="标识">
+          <input className="input mono" {...text("id")} disabled={!isNew} placeholder="my-agent" />
         </Field>
         <Field label="名称">
-          <input className="field" {...text("name")} />
+          <input className="input" {...text("name")} />
         </Field>
         <Field label="可执行文件名">
-          <input className="field mono" {...text("detect")} placeholder="claude" />
+          <input className="input mono" {...text("detect")} placeholder="claude" />
         </Field>
         <Field label="厂商">
-          <input className="field" {...text("vendor")} />
+          <input className="input" {...text("vendor")} />
         </Field>
         <Field label="启动命令">
-          <input className="field mono" {...text("launch")} placeholder="claude" />
+          <input className="input mono" {...text("launch")} placeholder="claude" />
         </Field>
         <Field label="带初始提示启动">
-          <input className="field mono" {...text("launch_with_prompt")} placeholder="claude {prompt}" />
+          <input className="input mono" {...text("launch_with_prompt")} placeholder="claude {prompt}" />
         </Field>
         <Field label="接续上次对话">
-          <input className="field mono" {...text("resume")} placeholder="claude --continue" />
+          <input className="input mono" {...text("resume")} placeholder="claude --continue" />
         </Field>
         <Field label="免确认开关">
-          <input className="field mono" {...text("yolo_flag")} placeholder="--dangerously-skip-permissions" />
+          <input className="input mono" {...text("yolo_flag")} placeholder="--dangerously-skip-permissions" />
         </Field>
         <Field label="插件目录开关">
-          <input className="field mono" {...text("plugin_dir_flag")} placeholder="--plugin-dir {dir}" />
+          <input className="input mono" {...text("plugin_dir_flag")} placeholder="--plugin-dir {dir}" />
         </Field>
         <Field label="文档地址">
-          <input className="field" {...text("docs_url")} />
+          <input className="input" {...text("docs_url")} />
         </Field>
       </div>
+      <div className="stack">
       <Field label="安装方式" hint="名称 | 命令，每行一种">
-        <textarea className="field mono" rows={3} value={install} spellCheck={false} onChange={(e) => setInstall(e.target.value)} placeholder="官方脚本 | curl -fsSL https://example.com/install.sh | bash" />
+        <textarea className="input mono" rows={3} value={install} spellCheck={false} onChange={(e) => setInstall(e.target.value)} placeholder="官方脚本 | curl -fsSL https://example.com/install.sh | bash" />
       </Field>
       <Field label="怎么登录">
-        <textarea className="field" rows={2} {...text("auth_hint")} />
+        <textarea className="input" rows={2} {...text("auth_hint")} />
       </Field>
-    </Modal>
+      </div>
+    </Dialog>
   );
 }

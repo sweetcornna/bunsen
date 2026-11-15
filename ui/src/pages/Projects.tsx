@@ -1,13 +1,13 @@
 import { FolderGit2, GitMerge, MoreHorizontal, Plus, RefreshCw, Trash2 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Markdown } from "../components/Markdown";
-import { Button, Confirm, cx, Empty, Field, Menu, Modal, Pill, Spinner, Toggle, type Tone } from "../components/ui";
+import { Badge, Button, Confirm, Dialog, Dot, Empty, EmptyLine, Field, ICON, IconButton, Loading, Menu, Notice, Page, Row, Section, Segmented, Spinner, Table, Toggle, When } from "../components/ui";
 import { api, asApiError, type ApiError, type MemberSync, type ProjectLine, type ProjectMachine, type ProjectMember, type ProjectRun, type ProjectView } from "../lib/api";
-import { fullTime, hasKey, maskUserinfo, relTime, sessionState } from "../lib/format";
+import { fmtWhen, maskUserinfo, sessionState } from "../lib/format";
 import { go, projectHref, sessionHref } from "../lib/route";
 import { BRANCH_RULE, branchProblem, defaultBranch, homeProblem, hubProblem, nameProblem, normalizeHome, trimName } from "../lib/projectRules";
+import { runKind, runStatus } from "../lib/research";
 import { findProject, hubServer, projectOf, skipWhy, syncSkipped, useApp } from "../lib/store";
-
 
 /** 研究项目列表。一个项目是一个汇合点（git 远程）加一条研究分支；几台机器各写各的 sync 分支，经研究分支汇合。 */
 export function Projects() {
@@ -28,71 +28,73 @@ export function Projects() {
     setRetrying(false);
   };
 
+  const empty = ready && !loadError && projects.length === 0;
   return (
-    <div className="page">
-      <div className="page-inner">
-        <header className="page-head">
-          <div>
-            <h1>研究项目</h1>
-          </div>
-          <Button icon={<Plus size={13} />} onClick={() => setAdding(true)}>
+    <Page
+      title="研究项目"
+      data-page="projects"
+      actions={
+        // 没有项目时主动作在空状态里，页头的这个降为 secondary（每页最多一个 primary）
+        <Button variant={empty ? "secondary" : "primary"} icon={<Plus size={ICON.md} />} onClick={() => setAdding(true)}>
+          新建项目
+        </Button>
+      }
+    >
+      {loadError && projects.length === 0 ? (
+        <Empty icon={<FolderGit2 size={ICON.lg} />} title={`取不到研究项目：${loadError.message}`} hint={loadError.hint}>
+          <Button loading={retrying} onClick={() => void retry()}>
+            重试
+          </Button>
+        </Empty>
+      ) : !ready ? (
+        <Loading />
+      ) : projects.length === 0 ? (
+        <Empty icon={<FolderGit2 size={ICON.lg} />} title="还没有研究项目" hint="同一个研究项目可以同时在本机和几台服务器上推进：各台机器的记录经汇合点（一个 git 远程）自动汇合，在这里看到合并后的全貌。">
+          <Button variant="primary" size="lg" icon={<Plus size={ICON.md} />} onClick={() => setAdding(true)}>
             新建项目
           </Button>
-        </header>
-
-        {loadError && projects.length === 0 ? (
-          <Empty icon={<FolderGit2 size={22} />} title={`取不到研究项目：${loadError.message}`} hint={loadError.hint}>
-            <Button loading={retrying} onClick={() => void retry()}>
-              重试
-            </Button>
-          </Empty>
-        ) : !ready ? (
-          <Empty title={<Spinner />} />
-        ) : projects.length === 0 ? (
-          <Empty icon={<FolderGit2 size={22} />} title="还没有研究项目" hint="同一个研究项目可以同时在本机和几台服务器上推进：各台机器的记录经汇合点（一个 git 远程）自动汇合，在这里看到合并后的全貌。">
-            <Button variant="primary" icon={<Plus size={13} />} onClick={() => setAdding(true)}>
-              新建项目
-            </Button>
-          </Empty>
-        ) : (
-          <>
-            {loadError && (
-              <div className="note err with-action">
-                <div>
-                  取不到最新的项目列表，下面是上次取到的：{loadError.message}
-                  {loadError.hint && <div className="dim">{loadError.hint}</div>}
-                </div>
+        </Empty>
+      ) : (
+        <>
+          {loadError && (
+            <Notice
+              tone="err"
+              hint={loadError.hint}
+              action={
                 <Button size="sm" loading={retrying} onClick={() => void retry()}>
                   重试
                 </Button>
-              </div>
-            )}
-            <div className="server-list">
-              {projects.map((p) => {
-                const members = sessions.filter((s) => s.project_id === p.id && !s.archived).length;
-                return (
-                  <a key={p.id} className="server-card project-card" href={projectHref(p.id)}>
-                    <div className="server-name">
-                      <b>{p.name}</b>
-                      <span className="tag mono">{p.branch}</span>
-                      {p.fetch_error && <Pill tone="err">取不到汇合点</Pill>}
-                    </div>
-                    <div className="server-sub mono ellipsis" title={maskUserinfo(p.hub)}>
-                      {maskUserinfo(p.hub)}
-                    </div>
-                    <div className="dim project-card-foot">
-                      <span>{members > 0 ? `${members} 个对话接入` : "还没有对话接入"}</span>
-                      <span>{p.fetched_at ? `${relTime(p.fetched_at)}取过汇合点` : "还没取过汇合点"}</span>
-                    </div>
-                  </a>
-                );
-              })}
-            </div>
-          </>
-        )}
-      </div>
+              }
+            >
+              取不到最新的项目列表，下面是上次取到的：{loadError.message}
+            </Notice>
+          )}
+          <div className="card-list">
+            {projects.map((p) => {
+              const members = sessions.filter((s) => s.project_id === p.id && !s.archived).length;
+              return (
+                <a key={p.id} className="surface-card project-card" href={projectHref(p.id)} data-project={p.id}>
+                  <div className="card-head">
+                    <span className="card-name">{p.name}</span>
+                    <Badge mono>{p.branch}</Badge>
+                    {p.fetch_error && <Badge tone="err">汇合点连不上</Badge>}
+                  </div>
+                  <div className="card-addr mono" title={maskUserinfo(p.hub)}>
+                    {maskUserinfo(p.hub)}
+                  </div>
+                  <div className="card-meta muted">
+                    {members > 0 ? `${members} 个对话接入` : "还没有对话接入"}
+                    {" · "}
+                    {p.fetched_at ? <When iso={p.fetched_at} suffix=" 取过汇合点" /> : "还没取过汇合点"}
+                  </div>
+                </a>
+              );
+            })}
+          </div>
+        </>
+      )}
       {adding && <ProjectForm onClose={() => setAdding(false)} />}
-    </div>
+    </Page>
   );
 }
 
@@ -157,7 +159,7 @@ function ProjectForm({ onClose }: { onClose: () => void }) {
   };
 
   return (
-    <Modal
+    <Dialog
       open
       // 关闭按钮、Esc、点遮罩都走这里：保存中一律不关。
       onOpenChange={(v) => !v && !busy && onClose()}
@@ -176,22 +178,22 @@ function ProjectForm({ onClose }: { onClose: () => void }) {
     >
       <div className="form-grid">
         <Field label="名称" className="wide" hint={nameErr ?? "最多 40 个字符，不能含 /"}>
-          <input className={cx("field", nameErr && "invalid")} value={f.name} onChange={set("name")} placeholder="长尾分类的标签平滑" autoFocus disabled={busy} />
+          <input className="input" aria-invalid={Boolean(nameErr)} value={f.name} onChange={set("name")} placeholder="长尾分类的标签平滑" disabled={busy} />
         </Field>
         <Field label="汇合点" className="wide" hint={hubErr ?? (at ? `${where}的裸仓库` : undefined)}>
-          <input className={cx("field mono", hubErr && "invalid")} value={f.hub} onChange={set("hub")} placeholder="git@github.com:you/proj.git" spellCheck={false} disabled={busy} />
+          <input className="input mono" aria-invalid={Boolean(hubErr)} value={f.hub} onChange={set("hub")} placeholder="git@github.com:you/proj.git" spellCheck={false} disabled={busy} />
         </Field>
         <Field label="研究分支（可选）" hint={branchHint}>
-          <input className={cx("field mono", branchErr && "invalid")} value={f.branch} onChange={set("branch")} placeholder="research/longtail" spellCheck={false} disabled={busy} />
+          <input className="input mono" aria-invalid={Boolean(branchErr)} value={f.branch} onChange={set("branch")} placeholder="research/longtail" spellCheck={false} disabled={busy} />
         </Field>
         <Field label="研究目录" hint={homeErr ?? (!home ? "留空用 research" : homeSaved !== home ? `会存成 ${homeSaved}` : "仓库里的相对路径")}>
-          <input className={cx("field mono", homeErr && "invalid")} value={f.home} onChange={set("home")} spellCheck={false} disabled={busy} />
+          <input className="input mono" aria-invalid={Boolean(homeErr)} value={f.home} onChange={set("home")} spellCheck={false} disabled={busy} />
         </Field>
       </div>
       {at && (
-        <div className="form-extra">
+        <div className="stack">
           <Toggle checked={create} onChange={setCreate} label={`${where}还没有这个仓库时，新建一个空的裸仓库`} disabled={busy} />
-          <div className="dim">
+          <div className="field-hint">
             {at.local
               ? "汇合点在本机时，只有本机的对话能接入；要让服务器也接入，改用 GitHub 这类各处都能访问的仓库。"
               : `汇合点在 ${at.alias} 上时，只有 ${at.alias} 自己和本机能接入；别的服务器要接入就改用 GitHub 这类各处都能访问的仓库。`}
@@ -199,12 +201,11 @@ function ProjectForm({ onClose }: { onClose: () => void }) {
         </div>
       )}
       {error && (
-        <div className="note err">
+        <Notice tone="err" hint={error.hint}>
           {error.message}
-          {error.hint && <div className="dim">{error.hint}</div>}
-        </div>
+        </Notice>
       )}
-    </Modal>
+    </Dialog>
   );
 }
 
@@ -351,104 +352,94 @@ export function ProjectPage({ id }: { id: string }) {
   if (error && !view) {
     return (
       <div className="page center">
-        <Empty icon={<FolderGit2 size={22} />} title={error.missing ? "没有这个研究项目" : error.message} hint={error.missing ? "它可能已经被删除。" : error.hint}>
+        <Empty icon={<FolderGit2 size={ICON.lg} />} title={error.missing ? "没有这个研究项目" : error.message} hint={error.missing ? "它可能已经被删除。回到项目列表看看。" : error.hint}>
           {!error.missing && <Button onClick={() => void load(false)}>重试</Button>}
-          <Button onClick={() => go("/projects")}>回到项目列表</Button>
+          <Button variant={error.missing ? "secondary" : "ghost"} onClick={() => go("/projects")}>
+            回到项目列表
+          </Button>
         </Empty>
       </div>
     );
   }
 
+  const hubDown = Boolean(view?.project.fetch_error ?? p?.fetch_error);
+  const split = view ? splitWarnings(view) : null;
   return (
-    <div className="page">
-      <div className="page-inner">
-        <header className="page-head">
-          <div className="project-title">
-            <h1>{p?.name ?? "研究项目"}</h1>
-            {p && (
-              <div className="server-sub mono">
-                {maskUserinfo(p.hub)} · {p.branch}
-                {view?.research_head && <span className="dim"> @ {view.research_head.slice(0, 8)}</span>}
-                <span className="dim sans">{p.fetched_at ? ` · ${relTime(p.fetched_at)}取过` : ""}</span>
-              </div>
-            )}
-          </div>
-          <div className="row">
-            {/* 带上之前存下的预填（例如去管理项目之前写了一半的提示词） */}
-            <Button size="sm" variant="primary" disabled={!p || deleting} onClick={() => p && (setDraft({ ...useApp.getState().draft, project_id: p.id }), go("/"))}>
-              新对话
-            </Button>
-            <Button size="sm" icon={<RefreshCw size={12} />} loading={refreshing} disabled={busy} onClick={() => void refresh()} title="重新取一次汇合点">
-              刷新
-            </Button>
-            <Button size="sm" icon={<GitMerge size={12} />} loading={syncing} disabled={!pid || busy} onClick={() => pid && void useApp.getState().syncProject(pid)} title="在每个接入的对话里执行 rk sync，再重新取汇合点">
-              {syncing ? "同步中…" : "立即同步"}
-            </Button>
-            <Menu
-              trigger={
-                <button type="button" className="icon-btn" aria-label="更多" disabled={deleting}>
-                  <MoreHorizontal size={15} />
-                </button>
-              }
-              // 同步进行中不能删：删完同步回来只会得到“找不到项目”
-              items={[{ label: syncing ? "删除项目（同步完成后才能删）" : "删除项目", icon: <Trash2 size={14} />, danger: true, disabled: !p || deleting || syncing, onSelect: () => setConfirmDel(true) }]}
-            />
-          </div>
-        </header>
-
-        {deleting && (
-          <div className="note with-action">
-            <div className="row">
-              <Spinner size={13} />
-              正在删除项目…要等本机的汇合点镜像空闲，正在取汇合点时可能要一两分钟。
-            </div>
-          </div>
-        )}
-        {delError && (
-          <div className="note err with-action">
-            <div>
-              删除没有完成：{delError.message}
-              {delError.hint && <div className="dim">{delError.hint}</div>}
-            </div>
-          </div>
-        )}
-
-        {!view ? (
-          <Empty title={<Spinner />} />
-        ) : (
+    <Page
+      data-page="project"
+      title={p?.name ?? "研究项目"}
+      sub={
+        p && (
           <>
-            {(view.warnings.length > 0 || error) && (
-              <div className="note-stack">
-                {view.warnings.map((w, i) => (
-                  <div key={`${i}:${w}`} className="note warn">
-                    {w}
-                  </div>
-                ))}
-                {error && (
-                  <div className="note err">
-                    {error.message}
-                    {error.hint && <div className="dim">{error.hint}</div>}
-                  </div>
-                )}
-              </div>
+            <span className="mono">
+              {maskUserinfo(p.hub)} · {p.branch}
+              {view?.research_head && ` @ ${view.research_head.slice(0, 8)}`}
+            </span>
+            {p.fetched_at && (
+              <>
+                {" · "}
+                <When iso={p.fetched_at} suffix=" 取过" />
+              </>
             )}
-            {pid && sync?.members && sync.members.length + skipped.length > 0 && (
-              <SyncResults members={sync.members} skipped={skipped} at={sync.at} view={view} onClose={() => useApp.getState().clearSync(pid)} />
-            )}
+          </>
+        )
+      }
+      actions={
+        <>
+          <Button icon={<RefreshCw size={ICON.md} />} loading={refreshing} disabled={busy} onClick={() => void refresh()} title="重新取一次汇合点">
+            刷新
+          </Button>
+          <Button icon={<GitMerge size={ICON.md} />} loading={syncing} disabled={!pid || busy} onClick={() => pid && void useApp.getState().syncProject(pid)} title="在每个接入的对话里执行 rk sync，再重新取汇合点">
+            {syncing ? "同步中…" : "立即同步"}
+          </Button>
+          {/* 带上之前存下的预填（例如去管理项目之前写了一半的提示词） */}
+          <Button variant="primary" disabled={!p || deleting} onClick={() => p && (setDraft({ ...useApp.getState().draft, project_id: p.id }), go("/"))}>
+            新对话
+          </Button>
+          <Menu
+            trigger={
+              <IconButton label="更多" disabled={deleting}>
+                <MoreHorizontal size={ICON.md} />
+              </IconButton>
+            }
+            // 同步进行中不能删：删完同步回来只会得到“找不到项目”
+            items={[{ label: syncing ? "删除项目（同步完成后才能删）" : "删除项目", icon: <Trash2 size={ICON.md} />, danger: true, disabled: !p || deleting || syncing, onSelect: () => setConfirmDel(true) }]}
+          />
+        </>
+      }
+    >
+      {deleting && <Notice icon={<Spinner size={ICON.md} />}>正在删除项目…要等本机的汇合点镜像空闲，正在取汇合点时可能要一两分钟。</Notice>}
+      {delError && (
+        <Notice tone="err" hint={delError.hint}>
+          删除没有完成：{delError.message}
+        </Notice>
+      )}
+
+      {!view || !split ? (
+        <Loading />
+      ) : (
+        <>
+          {hubDown && (
+            <Notice tone="err" raw={view.project.fetch_error} data-hub-down="" hint={view.project.fetched_at ? <>下面是 <When iso={view.project.fetched_at} /> 取到的内容。</> : "还没有成功取得过汇合点，下面暂时是空的。"}>
+              汇合点连不上
+            </Notice>
+          )}
+          <ProjectNotices items={split.top} error={error} />
+          {pid && sync?.members && sync.members.length + skipped.length > 0 && <SyncResults members={sync.members} skipped={skipped} at={sync.at} view={view} onClose={() => useApp.getState().clearSync(pid)} />}
+          <div className="sections">
             {view.decisions && (
-              <section className="card">
-                <h3>需要你决定</h3>
+              <Section title="需要你决定" data-section="decisions">
                 {/* 内容来自汇合点：图片不自动加载（会请求外部地址），只给链接 */}
                 <Markdown text={view.decisions} images="link" />
-              </section>
+              </Section>
             )}
-            <MachinesCard view={view} />
-            <LinesCard view={view} />
-            <RunsCard runs={view.runs} />
+            <MachinesCard view={view} stale={split.stale} hubDown={hubDown} />
+            <LinesCard view={view} hubDown={hubDown} />
+            <RunsCard runs={view.runs} hubDown={hubDown} />
             <MembersCard view={view} />
-          </>
-        )}
-      </div>
+          </div>
+        </>
+      )}
       <Confirm
         open={confirmDel}
         onOpenChange={setConfirmDel}
@@ -458,117 +449,192 @@ export function ProjectPage({ id }: { id: string }) {
         danger
         onConfirm={() => p && remove(p.id, p.name)}
       />
-    </div>
+    </Page>
+  );
+}
+
+/**
+ * 服务端的警告分两类（设计稿 5.3）：
+ * - 有归属行的，只在那一行显示，顶部不重复：某台机器“并入会冲突”“N 小时没有同步”（机器表）、某个会话“还没有机器代号”（接入的对话）、
+ *   研究分支上未关闭的核对问题和没核过的结论文件（研究线表的两列，合计写在研究线区块标题旁）；
+ * - 汇合点取不到另有“汇合点连不上”一条（原始报错折叠），这时“汇合点上还没有研究分支”也不再单列。
+ * 其余是项目级的，顶部合成一条“N 条需要处理”。
+ */
+function splitWarnings(view: ProjectView): { top: string[]; stale: Map<string, string> } {
+  const codes = new Set(view.machines.map((m) => m.code));
+  const conflicts = new Set(view.machines.filter((m) => m.conflict).map((m) => m.code));
+  const titles = new Set(view.members.filter((m) => !m.machine).map((m) => m.title));
+  const hubDown = Boolean(view.project.fetch_error);
+  const stale = new Map<string, string>();
+  const top: string[] = [];
+  for (const w of view.warnings) {
+    if (w.startsWith("取不到汇合点：")) continue;
+    if (hubDown && w.startsWith("汇合点上还没有 ")) continue;
+    const conflict = /^(\S+) 的记录并入 .* 会冲突/.exec(w);
+    if (conflict && conflicts.has(conflict[1])) continue;
+    const late = /^(\S+) 已经 (\d+) 小时没有同步$/.exec(w);
+    if (late && codes.has(late[1])) {
+      stale.set(late[1], `${late[2]} 小时没有同步`);
+      continue;
+    }
+    const noCode = /^会话 (.+) 还没有机器代号/.exec(w);
+    if (noCode && titles.has(noCode[1])) continue;
+    if (/^研究分支上有 \d+ 个未关闭的核对问题、\d+ 个结论文件还没核过$/.test(w) && view.lines.length > 0) continue;
+    top.push(w);
+  }
+  return { top, stale };
+}
+
+/** 顶部的项目级问题：一条 Notice“N 条需要处理”，先显示前 2 条、其余折起；有出错时用 err，否则 warn。 */
+function ProjectNotices({ items, error }: { items: string[]; error: { message: string; hint: string | null } | null }) {
+  const [all, setAll] = useState(false);
+  if (items.length === 0 && !error) return null;
+  const list = error ? [`${error.message}${error.hint ? `（${error.hint}）` : ""}`, ...items] : items;
+  const shown = all ? list : list.slice(0, 2);
+  return (
+    <Notice
+      tone={error ? "err" : "warn"}
+      data-project-notice=""
+      action={
+        list.length > 2 && (
+          <Button size="sm" variant="ghost" onClick={() => setAll((v) => !v)} aria-expanded={all}>
+            {all ? "收起" : `另 ${list.length - 2} 条`}
+          </Button>
+        )
+      }
+    >
+      {list.length === 1 ? (
+        list[0]
+      ) : (
+        <>
+          <div className="fw-medium">{list.length} 条需要处理</div>
+          <ul className="issue-list">
+            {shown.map((w, i) => (
+              <li key={`${i}:${w}`}>{w}</li>
+            ))}
+          </ul>
+        </>
+      )}
+    </Notice>
   );
 }
 
 function SyncResults({ members, skipped, at, view, onClose }: { members: MemberSync[]; skipped: ProjectMember[]; at: number; view: ProjectView; onClose: () => void }) {
   // 同一台服务器上可能有几个对话，按标题区分【修订 A3】；旧版服务端没有 title，用视图里的成员补上。
   const titleOf = (m: MemberSync) => m.title || view.members.find((x) => x.session_id === m.session_id)?.title || m.session_id;
-  const done = new Date(at).toISOString();
   return (
-    <section className="card">
-      <h3>
-        同步结果
-        <span className="dim" title={fullTime(done)}>
-          {fullTime(done)} 完成
-        </span>
-        <span className="grow" />
-        <button type="button" className="link-btn" onClick={onClose}>
+    <Section
+      title="同步结果"
+      data-section="sync"
+      count={<When iso={at} suffix=" 完成" />}
+      end={
+        <Button size="sm" variant="ghost" onClick={onClose}>
           收起
-        </button>
-      </h3>
-      <ul className="plain-list">
+        </Button>
+      }
+    >
+      <div className="list">
         {members.map((m) => (
-          <li key={m.session_id}>
-            <Pill tone={m.ok ? "ok" : "err"}>{m.ok ? "完成" : "没完成"}</Pill>
-            <a href={sessionHref(m.session_id)}>{titleOf(m)}</a>
-            <span className="dim">{m.server_alias}</span>
-            <span className={m.ok ? "dim" : "c-err"}>{m.detail}</span>
-          </li>
+          <Row
+            key={m.session_id}
+            href={sessionHref(m.session_id)}
+            name={
+              <>
+                {titleOf(m)} <span className="muted">{m.server_alias}</span>
+              </>
+            }
+            meta={<span className={m.ok ? undefined : "tone-err"}>{m.ok ? m.detail || "完成" : `没完成：${m.detail}`}</span>}
+            title={m.detail || undefined}
+          />
         ))}
         {skipped.map((m) => (
-          <li key={m.session_id}>
-            <Pill tone="mute">跳过</Pill>
-            <a href={sessionHref(m.session_id)}>{m.title || m.session_id}</a>
-            <span className="dim">{m.server_alias}</span>
-            <span className="dim">{skipWhy(m)}，不参与同步</span>
-          </li>
+          <Row
+            key={m.session_id}
+            href={sessionHref(m.session_id)}
+            name={
+              <>
+                {m.title || m.session_id} <span className="muted">{m.server_alias}</span>
+              </>
+            }
+            meta={`跳过：${skipWhy(m)}，不参与同步`}
+          />
         ))}
-      </ul>
-    </section>
+      </div>
+    </Section>
   );
 }
 
-function machineState(m: ProjectMachine): { tone: Tone; label: string } {
-  if (m.conflict) return { tone: "err", label: "并入会冲突" };
-  if (m.ahead > 0) return { tone: "warn", label: `${m.ahead} 个提交待并入` };
-  if (m.behind > 0) return { tone: "mute", label: `落后 ${m.behind}` };
-  return { tone: "ok", label: "已汇合" };
+/** 机器的汇合状态：已汇合、待并入、落后都是正常流转，用中性字；并入会冲突 err；很久没同步 warn。一行只有一个上色的字。 */
+function machineState(m: ProjectMachine, stale: string | undefined): { cls?: string; label: string; extra?: string } {
+  const lag = m.ahead > 0 && m.behind > 0 && !m.conflict ? `也落后 ${m.behind}` : undefined;
+  if (m.conflict) return { cls: "tone-err", label: "并入会冲突", extra: [lag, stale].filter(Boolean).join(" · ") || undefined };
+  if (stale) return { cls: "tone-warn", label: stale, extra: m.ahead > 0 ? `${m.ahead} 个提交待并入` : m.behind > 0 ? `落后 ${m.behind}` : undefined };
+  if (m.ahead > 0) return { label: `${m.ahead} 个提交待并入`, extra: lag };
+  if (m.behind > 0) return { cls: "muted", label: `落后 ${m.behind}` };
+  return { label: "已汇合" };
 }
 
-function MachinesCard({ view }: { view: ProjectView }) {
+function MachinesCard({ view, stale, hubDown }: { view: ProjectView; stale: Map<string, string>; hubDown: boolean }) {
   return (
-    <section className="card flush">
-      <h3>
-        机器
-        <span className="dim">{view.machines.length}</span>
-      </h3>
+    <Section title="机器" count={view.machines.length} data-section="machines">
       {view.machines.length === 0 ? (
-        <div className="card-hint">汇合点上还没有任何机器的 sync 分支。部署一个接入本项目的对话，或在仓库里执行 rk sync --setup。</div>
+        <EmptyLine>{hubDown ? "汇合点连不上，列不出机器。" : "汇合点上还没有任何机器的 sync 分支。部署一个接入本项目的对话，或在仓库里执行 rk sync --setup。"}</EmptyLine>
       ) : (
-        <div className="table-wrap">
-          <table className="table">
-            <thead>
-              <tr>
-                <th>代号</th>
-                <th>服务器</th>
-                <th>最新提交</th>
-                <th>状态</th>
-              </tr>
-            </thead>
-            <tbody>
-              {view.machines.map((m) => {
-                const st = machineState(m);
-                return (
-                  <tr key={m.code}>
-                    <td className="mono nowrap">{m.code}</td>
-                    <td className="nowrap">
-                      {m.server_alias ? (
-                        m.sessions.length > 0 ? (
-                          <a href={sessionHref(m.sessions[0])} title={`${m.sessions.length} 个对话`}>
-                            {m.server_alias}
-                          </a>
-                        ) : (
-                          m.server_alias
-                        )
+        <Table>
+          <thead>
+            <tr>
+              <th className="shrink">代号</th>
+              <th className="shrink">服务器</th>
+              <th>最新提交</th>
+              <th className="shrink">状态</th>
+            </tr>
+          </thead>
+          <tbody>
+            {view.machines.map((m) => {
+              const st = machineState(m, stale.get(m.code));
+              return (
+                <tr key={m.code} data-machine={m.code}>
+                  <td className="mono nowrap">{m.code}</td>
+                  <td className="nowrap">
+                    {m.server_alias ? (
+                      m.sessions.length > 0 ? (
+                        <a href={sessionHref(m.sessions[0])} title={`${m.sessions.length} 个对话`}>
+                          {m.server_alias}
+                        </a>
                       ) : (
-                        <span className="dim" title="Bunsen 里没有用这个代号的对话">
-                          —
-                        </span>
+                        m.server_alias
+                      )
+                    ) : (
+                      <span className="muted" title="Bunsen 里没有用这个代号的对话">
+                        —
+                      </span>
+                    )}
+                  </td>
+                  <td>
+                    <div className="ellipsis" title={m.subject}>
+                      {m.subject || <span className="muted">（没有说明）</span>}
+                    </div>
+                    <div className="muted t-meta">
+                      <span className="mono">{m.head.slice(0, 8)}</span>
+                      {m.committed_at && (
+                        <>
+                          {" · "}
+                          <When iso={m.committed_at} />
+                        </>
                       )}
-                    </td>
-                    <td className="cell-text">
-                      <div className="ellipsis" title={m.subject}>
-                        {m.subject || <span className="dim">（没有说明）</span>}
-                      </div>
-                      <div className="dim mono" title={fullTime(m.committed_at)}>
-                        {m.head.slice(0, 8)}
-                        {m.committed_at && <span className="sans"> · {relTime(m.committed_at)}</span>}
-                      </div>
-                    </td>
-                    <td className="nowrap">
-                      <Pill tone={st.tone}>{st.label}</Pill>
-                      {m.ahead > 0 && m.behind > 0 && !m.conflict && <div className="dim">也落后 {m.behind}</div>}
-                    </td>
-                  </tr>
-                );
-              })}
-            </tbody>
-          </table>
-        </div>
+                    </div>
+                  </td>
+                  <td className="nowrap">
+                    <div className={st.cls}>{st.label}</div>
+                    {st.extra && <div className="muted t-meta">{st.extra}</div>}
+                  </td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </Table>
       )}
-    </section>
+    </Section>
   );
 }
 
@@ -583,116 +649,110 @@ function lineSourceWhy(l: ProjectLine): string {
 }
 
 // 研究线的两个数：研究分支上的 rk.py 旧于 0.6.0 时为 null（没算，契约 Q10），旧版服务端没有这两个字段；都显示“—”，不当成没有问题。
-// 项目整体的数字体现在警告里，视图顶部不另设摘要（Q11）。
-function Count({ n, tone }: { n: number | null | undefined; tone: Tone }) {
+// 未关闭问题大于 0 时是这一行唯一上色的字；未核文件用中性字。
+function Count({ n, err }: { n: number | null | undefined; err?: boolean }) {
   if (typeof n !== "number")
     return (
-      <span className="dim" title="研究分支上的研究工具旧于 0.6.0，没有核对记录可数">
+      <span className="muted" title="研究分支上的研究工具旧于 0.6.0，没有核对记录可数">
         —
       </span>
     );
-  return <span className={n > 0 ? `c-${tone}` : "dim"}>{n}</span>;
+  return <span className={n > 0 ? (err ? "tone-err" : undefined) : "muted"}>{n}</span>;
 }
 
-function LinesCard({ view }: { view: ProjectView }) {
+/** 模板占位（“<无 | 运行 ID …>”这类没填的尖括号）不当内容显示。 */
+const unfilled = (s: string | null | undefined) => !s || /^<[^>]*>$/.test(s.trim());
+
+function LinesCard({ view, hubDown }: { view: ProjectView; hubDown: boolean }) {
   const branch = view.project.branch;
+  const t = view.trust;
   return (
-    <section className="card flush">
-      <h3>
-        研究线
-        <span className="dim">{view.lines.length}</span>
-      </h3>
+    <Section
+      title="研究线"
+      count={view.lines.length}
+      data-section="lines"
+      end={t && (t.open_fails > 0 || t.unreviewed > 0) ? <span className="muted t-meta" data-lines-total="">研究分支合计 {t.open_fails} 个未关闭问题 · {t.unreviewed} 个未核文件</span> : undefined}
+    >
       {view.lines.length === 0 ? (
-        <div className="card-hint">还没有研究线：在接入的对话里 rk line new &lt;线&gt;。</div>
+        <EmptyLine>{hubDown ? "汇合点连不上，列不出研究线。" : "还没有研究线：在接入的对话里 rk line new <线>。"}</EmptyLine>
       ) : (
-        <div className="table-wrap">
-          <table className="table">
-            <thead>
-              <tr>
-                <th>线</th>
-                <th>推进者</th>
-                <th>阶段</th>
-                <th>在等什么</th>
-                <th>下一步</th>
-                <th className="num tight">
-                  未关闭
-                  <br />
-                  问题
-                </th>
-                <th className="num tight">
-                  未核
-                  <br />
-                  文件
-                </th>
-              </tr>
-            </thead>
-            <tbody>
-              {view.lines.map((l) => (
-                <tr key={l.line}>
+        <Table>
+          <thead>
+            <tr>
+              <th className="shrink">线</th>
+              <th className="shrink">推进者</th>
+              <th>阶段</th>
+              <th>在等什么</th>
+              <th>下一步</th>
+              <th className="num shrink" title="未关闭的核对问题">
+                问题
+              </th>
+              <th className="num shrink" title="没核过的结论文件">
+                未核
+              </th>
+            </tr>
+          </thead>
+          <tbody>
+            {view.lines.map((l) => {
+              const next = l.next.map((n) => n.replace(/^\s*(\d+\.|[-*])\s+(\[[ xX]\]\s+)?/, "")).filter((n) => !unfilled(n));
+              return (
+                <tr key={l.line} data-line={l.line}>
                   <td className="nowrap">
-                    <b className="mono">{l.line}</b>
+                    <span className="mono fw-medium">{l.line}</span>
                     {l.source !== branch && (
-                      <div>
-                        <span className="tag" title={lineSourceWhy(l)}>
-                          取自 {l.source}
-                        </span>
+                      <div className="muted t-meta" title={lineSourceWhy(l)}>
+                        取自 <span className="mono">{l.source}</span>
                       </div>
                     )}
                   </td>
                   <td className="mono nowrap">
-                    {l.holder ?? <span className="dim sans">无人持有</span>}
-                    <span className="dim"> #{l.token}</span>
+                    {l.holder ?? <span className="muted sans">无人持有</span>}
+                    <span className="muted"> #{l.token}</span>
                   </td>
-                  <td className="cell-text">{l.stage ?? <span className="dim">—</span>}</td>
-                  <td className="cell-text">{l.waiting ?? <span className="dim">—</span>}</td>
+                  <td>{unfilled(l.stage) ? <span className="muted">—</span> : l.stage}</td>
+                  <td>{unfilled(l.waiting) ? <span className="muted">—</span> : l.waiting}</td>
                   <td>
-                    {l.next.length > 0 ? (
+                    {next.length > 0 ? (
                       <ul className="next-list">
-                        {l.next.map((n, i) => (
-                          <li key={i}>{n.replace(/^\s*(\d+\.|[-*])\s+(\[[ xX]\]\s+)?/, "")}</li>
+                        {next.map((n, i) => (
+                          <li key={i}>{n}</li>
                         ))}
                       </ul>
                     ) : (
-                      <span className="dim">—</span>
+                      <span className="muted">—</span>
                     )}
-                    {l.updated && <div className="dim">更新于 {l.updated}</div>}
+                    {l.updated && <div className="muted t-meta">更新于 {fmtWhen(l.updated) || l.updated}</div>}
                   </td>
-                  <td className="num tight">
-                    <Count n={l.open_fails} tone="err" />
+                  <td className="num">
+                    <Count n={l.open_fails} err />
                   </td>
-                  <td className="num tight">
-                    <Count n={l.unreviewed} tone="warn" />
+                  <td className="num">
+                    <Count n={l.unreviewed} />
                   </td>
                 </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
+              );
+            })}
+          </tbody>
+        </Table>
       )}
-    </section>
+    </Section>
   );
 }
-
-const RUN_TONE: Record<ProjectRun["state"], { tone: Tone; label: string }> = {
-  ok: { tone: "ok", label: "成功" },
-  failed: { tone: "err", label: "失败" },
-  open: { tone: "accent", label: "未结束" },
-};
 
 type RunFilter = "all" | "open" | "failed" | "pending";
 type RunFilterDef = { id: RunFilter; label: string; test: (r: ProjectRun) => boolean };
 const ALL_RUNS: RunFilterDef = { id: "all", label: "全部", test: () => true };
 const RUN_FILTERS: RunFilterDef[] = [
   ALL_RUNS,
-  { id: "open", label: "未结束", test: (r) => r.state === "open" },
+  { id: "open", label: "进行中", test: (r) => r.state === "open" },
   { id: "failed", label: "失败", test: (r) => r.state === "failed" },
   { id: "pending", label: "未进研究分支", test: (r) => !r.integrated },
 ];
 
-function RunsCard({ runs }: { runs: ProjectRun[] }) {
+function RunsCard({ runs, hubDown }: { runs: ProjectRun[]; hubDown: boolean }) {
   const [all, setAll] = useState(false);
   const [chosen, setFilter] = useState<RunFilter>("all");
-  // 选中的那一类刷新后变成 0 条（例如未结束的都跑完了）：回到“全部”。
+  // 选中的那一类刷新后变成 0 条（例如进行中的都跑完了）：回到“全部”。
   const want = RUN_FILTERS.find((f) => f.id === chosen) ?? ALL_RUNS;
   const current = runs.some(want.test) ? want : ALL_RUNS;
   const filter = current.id;
@@ -702,110 +762,109 @@ function RunsCard({ runs }: { runs: ProjectRun[] }) {
   const picked = runs.filter(current.test);
   const shown = all ? picked : picked.slice(0, 50);
   return (
-    <section className="card flush">
-      <h3>
-        运行
-        <span className="dim">{runs.length}</span>
-        <span className="grow" />
-        {runs.length > 0 && (
-          <span className="filters">
-            {RUN_FILTERS.map((f) => {
+    <Section
+      title="运行"
+      count={runs.length}
+      data-section="runs"
+      end={
+        runs.length > 0 && (
+          <Segmented<RunFilter>
+            label="按状态筛选运行"
+            value={filter}
+            onChange={setFilter}
+            options={RUN_FILTERS.map((f) => {
               const n = runs.filter(f.test).length;
-              return (
-                <button key={f.id} type="button" className={cx("filter", filter === f.id && "on")} onClick={() => setFilter(f.id)} disabled={n === 0 && f.id !== "all"}>
-                  {f.label}
-                  {f.id !== "all" && <i>{n}</i>}
-                </button>
-              );
+              return { value: f.id, label: f.label, count: f.id === "all" ? null : n, disabled: n === 0 && f.id !== "all" };
             })}
-          </span>
-        )}
-      </h3>
+          />
+        )
+      }
+    >
       {runs.length === 0 ? (
-        <div className="card-hint">还没有运行记录。</div>
+        <EmptyLine>{hubDown ? "汇合点连不上，列不出运行。" : "还没有运行记录。"}</EmptyLine>
       ) : picked.length === 0 ? (
-        <div className="card-hint">没有这一类的运行。</div>
+        <EmptyLine>没有这一类的运行。</EmptyLine>
       ) : (
         <>
-          <div className="table-wrap">
-            <table className="table">
-              <thead>
-                <tr>
-                  <th>运行</th>
-                  <th>机器</th>
-                  <th>线</th>
-                  <th>状态</th>
-                  <th>开始</th>
-                  <th>汇合</th>
-                </tr>
-              </thead>
-              <tbody>
-                {shown.map((r) => {
-                  const st = hasKey(RUN_TONE, r.state) ? RUN_TONE[r.state] : { tone: "mute" as const, label: r.state };
-                  return (
-                    <tr key={r.run_id}>
-                      <td>
-                        <span className="mono nowrap">{r.run_id}</span>
-                        <div className="dim ellipsis run-note" title={r.note || undefined}>
-                          {r.kind}
-                          {r.note && ` · ${r.note}`}
-                        </div>
-                      </td>
-                      <td className="mono nowrap">{r.machine ?? <span className="dim">—</span>}</td>
-                      <td className="mono nowrap">{r.line ?? <span className="dim">—</span>}</td>
-                      <td className="nowrap">
-                        <Pill tone={st.tone}>
-                          {st.label}
-                          {r.state === "failed" && r.exit_code !== null ? ` ${r.exit_code}` : ""}
-                        </Pill>
-                      </td>
-                      <td className="dim nowrap" title={fullTime(r.started_at)}>
-                        {r.started_at ? relTime(r.started_at) : "—"}
-                      </td>
-                      <td className="nowrap">{r.integrated ? <span className="c-ok">已进研究分支</span> : <span className="c-warn">只在 {r.source}</span>}</td>
-                    </tr>
-                  );
-                })}
-              </tbody>
-            </table>
-          </div>
+          <Table>
+            <thead>
+              <tr>
+                <th>运行</th>
+                <th className="shrink">机器</th>
+                <th className="shrink">线</th>
+                <th className="shrink">状态</th>
+                <th className="shrink">开始</th>
+                <th className="shrink">汇合</th>
+              </tr>
+            </thead>
+            <tbody>
+              {shown.map((r) => {
+                // 状态按第 4 节：成功是中性字，只有失败（err 字）和进行中（live 点）显眼。
+                const st = runStatus(r.state === "open" ? "running" : r.state === "ok" ? "done" : r.state, r.exit_code);
+                const kind = runKind(r.kind);
+                return (
+                  <tr key={r.run_id} data-run={r.run_id}>
+                    <td>
+                      <span className="mono nowrap">{r.run_id}</span>
+                      <div className="muted ellipsis t-meta" title={r.note || undefined}>
+                        {kind.label}
+                        {r.note && ` · ${r.note}`}
+                      </div>
+                    </td>
+                    <td className="mono nowrap">{r.machine ?? <span className="muted">—</span>}</td>
+                    <td className="mono nowrap">{r.line ?? <span className="muted">—</span>}</td>
+                    <td className="nowrap">
+                      {st.kind === "live" && <Dot tone="live" label="进行中" />} <span className={st.kind === "failed" ? "tone-err" : undefined}>{st.label}</span>
+                    </td>
+                    <td className="muted nowrap">{r.started_at ? <When iso={r.started_at} /> : "—"}</td>
+                    <td className="nowrap">{r.integrated ? <span className="muted">已进研究分支</span> : <span>只在 <span className="mono">{r.source}</span></span>}</td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </Table>
           {picked.length > shown.length && (
-            <button type="button" className="link-btn table-more" onClick={() => setAll(true)}>
-              显示全部 {picked.length} 条
-            </button>
+            <div className="table-foot">
+              <Button size="sm" variant="ghost" data-more="" onClick={() => setAll(true)}>
+                显示全部 {picked.length} 条
+              </Button>
+            </div>
           )}
         </>
       )}
-    </section>
+    </Section>
   );
 }
 
 function MembersCard({ view }: { view: ProjectView }) {
   return (
-    <section className="card">
-      <h3>
-        接入的对话
-        <span className="dim">{view.members.length}</span>
-      </h3>
+    <Section title="接入的对话" count={view.members.length} data-section="members">
       {view.members.length === 0 ? (
-        <div className="card-hint">还没有。点“新对话”在本机或某台服务器上接入这个项目。</div>
+        <EmptyLine>还没有。点“新对话”在本机或某台服务器上接入这个项目。</EmptyLine>
       ) : (
-        <ul className="plain-list">
+        <div className="list">
           {view.members.map((m) => {
             const st = sessionState(m.state);
+            // 一行只有一个上色的元素：连不上（err 点）优先；没有机器代号（warn 徽标）时不再画运行中的点
+            const dot = st.dot === "err" || (st.dot === "live" && m.machine) ? st.dot : null;
             return (
-              <li key={m.session_id}>
-                <Pill tone={st.tone}>{st.label}</Pill>
-                <a href={sessionHref(m.session_id)}>{m.title}</a>
-                <span className="dim">
-                  {m.server_alias} · <span className="mono">{m.workdir}</span>
-                </span>
-                {m.machine ? <span className="tag mono">{m.machine}</span> : <span className="tag warn">还没有代号</span>}
-              </li>
+              <Row
+                key={m.session_id}
+                href={sessionHref(m.session_id)}
+                data-member={m.session_id}
+                title={`${m.title}\n${st.label} · ${m.server_alias}:${m.workdir}`}
+                lead={dot ? <Dot tone={dot} label={st.label} /> : <span />}
+                name={
+                  <>
+                    {m.title} <span className="muted">{m.server_alias}</span> <span className="mono muted t-meta">{m.workdir}</span>
+                  </>
+                }
+                meta={m.machine ? <Badge mono>{m.machine}</Badge> : <Badge tone={dot === "err" ? "neutral" : "warn"}>还没有机器代号</Badge>}
+              />
             );
           })}
-        </ul>
+        </div>
       )}
-    </section>
+    </Section>
   );
 }

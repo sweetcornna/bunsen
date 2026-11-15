@@ -1,11 +1,12 @@
 import { ChevronDown, ChevronRight, FolderGit2, MoreHorizontal, PanelLeftClose, Plus, RefreshCw, Search, Server as ServerIcon, Settings as SettingsIcon } from "lucide-react";
 import { useMemo, useState } from "react";
 import type { Session } from "../lib/api";
-import { sessionState, shortTime } from "../lib/format";
-import { go, type Route } from "../lib/route";
+import { sessionState } from "../lib/format";
+import { go, sessionHref, type Route } from "../lib/route";
+import { startSessionDrag } from "../lib/splitStore";
 import { agentOf, projectLabel, useApp } from "../lib/store";
 import { SessionMenu } from "./SessionMenu";
-import { cx, Dot, IconButton, Logo, Spinner } from "./ui";
+import { Dot, ICON, IconButton, Logo, Row, ScrollArea, Spinner, When } from "./ui";
 
 const stamp = (s: Session) => Date.parse(s.last_active_at ?? s.created_at) || 0;
 const DAY = 86400_000;
@@ -46,68 +47,58 @@ export function Sidebar({ route, onCollapse, onPalette }: { route: Route; onColl
           <span>Bunsen</span>
         </button>
         <IconButton label="刷新会话状态" onClick={() => void refreshSessions(true)} disabled={refreshing}>
-          {refreshing ? <Spinner size={13} /> : <RefreshCw size={14} />}
+          {refreshing ? <Spinner size={ICON.md} /> : <RefreshCw size={ICON.md} />}
         </IconButton>
         <IconButton label="收起侧栏" onClick={onCollapse}>
-          <PanelLeftClose size={15} />
+          <PanelLeftClose size={ICON.md} />
         </IconButton>
       </div>
 
-      <div className="side-actions">
-        <button type="button" className={cx("side-new", route.name === "new" && "on")} onClick={() => go("/")}>
-          <Plus size={14} />
-          <span>新对话</span>
-          <kbd>⌘N</kbd>
-        </button>
-        <button type="button" className="side-search" onClick={onPalette}>
-          <Search size={13} />
-          <span>搜索</span>
-          <kbd>⌘K</kbd>
-        </button>
-      </div>
+      <nav className="side-nav" aria-label="动作">
+        <Row density="nav" lead={<Plus size={ICON.md} />} name="新对话" meta={<kbd>⌘N</kbd>} selected={route.name === "new"} onClick={() => go("/")} />
+        <Row density="nav" lead={<Search size={ICON.md} />} name="搜索" meta={<kbd>⌘K</kbd>} onClick={onPalette} />
+      </nav>
 
-      <nav className="side-list" aria-label="云端对话">
-        {groups.length === 0 && archived.length === 0 && (
-          <div className="side-empty">
-            还没有对话
-          </div>
-        )}
+      <ScrollArea className="side-list" role="navigation" aria-label="云端对话">
+        {groups.length === 0 && archived.length === 0 && <div className="empty-line side-section">还没有对话</div>}
         {groups.map((g) => (
-          <section key={g.key}>
-            <h3 className="side-group">{g.label}</h3>
+          <section key={g.key} className="side-section">
+            <h3 className="group-title">{g.label}</h3>
             {g.items.map((s) => (
               <SessionRow key={s.id} session={s} active={s.id === activeId} />
             ))}
           </section>
         ))}
         {archived.length > 0 && (
-          <section>
-            <button type="button" className="side-group as-button" onClick={() => setShowArchived((v) => !v)}>
-              {showArchived ? <ChevronDown size={12} /> : <ChevronRight size={12} />}
-              已归档
-              <span>{archived.length}</span>
+          <section className="side-section">
+            <button type="button" className="group-title" onClick={() => setShowArchived((v) => !v)} aria-expanded={showArchived}>
+              {showArchived ? <ChevronDown size={ICON.xs} /> : <ChevronRight size={ICON.xs} />}
+              已归档 {archived.length}
             </button>
             {showArchived && archived.map((s) => <SessionRow key={s.id} session={s} active={s.id === activeId} />)}
           </section>
         )}
-      </nav>
+      </ScrollArea>
 
-      <div className="side-foot">
-        <button type="button" className={cx("side-link", (route.name === "projects" || route.name === "project") && "on")} onClick={() => go("/projects")}>
-          <FolderGit2 size={14} />
-          <span>研究项目</span>
-          <em>{projects.length > 0 ? `${projects.length} 个` : projectsReady ? "未建" : ""}</em>
-        </button>
-        <button type="button" className={cx("side-link", route.name === "servers" && "on")} onClick={() => go("/servers")}>
-          <ServerIcon size={14} />
-          <span>服务器</span>
-          <em>{servers.length === 0 ? "未添加" : `${online}/${servers.length} 在线`}</em>
-        </button>
-        <button type="button" className={cx("side-link", route.name === "settings" && "on")} onClick={() => go("/settings")}>
-          <SettingsIcon size={14} />
-          <span>设置</span>
-        </button>
-      </div>
+      <nav className="side-foot" aria-label="页面">
+        <Row
+          density="nav"
+          lead={<FolderGit2 size={ICON.md} />}
+          name="研究项目"
+          meta={projects.length > 0 ? `${projects.length} 个` : projectsReady ? "未建" : ""}
+          selected={route.name === "projects" || route.name === "project"}
+          onClick={() => go("/projects")}
+        />
+        <Row
+          density="nav"
+          lead={<ServerIcon size={ICON.md} />}
+          name="服务器"
+          meta={servers.length === 0 ? "未添加" : `${online}/${servers.length} 在线`}
+          selected={route.name === "servers"}
+          onClick={() => go("/servers")}
+        />
+        <Row density="nav" lead={<SettingsIcon size={ICON.md} />} name="设置" selected={route.name === "settings"} onClick={() => go("/settings")} />
+      </nav>
     </aside>
   );
 }
@@ -117,20 +108,32 @@ function SessionRow({ session, active }: { session: Session; active: boolean }) 
   const project = useApp((s) => (session.project_id ? projectLabel(s, session.project_id) : null));
   const agent = agentOf(agents, session.agent_id);
   const st = sessionState(session.state);
-  const running = session.state === "running";
   const tip = `${session.title}\n${st.label} · ${agent?.name ?? session.agent_id} · ${session.server_alias}:${session.workdir}${project ? `\n研究项目 ${project}${session.machine ? ` · 机器 ${session.machine}` : ""}` : ""}`;
+  // 右键打开同一个“更多”菜单；拖进会话页在分屏中打开（分屏稿第 5 节）
+  const [menu, setMenu] = useState(false);
   return (
-    <div className={cx("side-row", active && "on")}>
-      <button type="button" className="side-row-main" onClick={() => go(`/s/${session.id}`)} title={tip}>
-        <Dot tone={st.tone} pulse={running} />
-        <span className="side-row-title">{session.title}</span>
-        <span className="side-row-time">{shortTime(session.last_active_at ?? session.created_at)}</span>
-      </button>
-      <SessionMenu session={session}>
-        <button type="button" className="icon-btn side-row-more" aria-label="更多">
-          <MoreHorizontal size={14} />
-        </button>
-      </SessionMenu>
-    </div>
+    <Row
+      density="nav"
+      data-session={session.id}
+      selected={active}
+      href={sessionHref(session.id)}
+      title={tip}
+      onDragStart={(e) => startSessionDrag(e, session.id)}
+      onContextMenu={(e) => {
+        e.preventDefault();
+        setMenu(true);
+      }}
+      // 状态点只给“运行中”和“连不上”；其他状态留出同样的位置，标题对齐
+      lead={st.dot ? <Dot tone={st.dot} label={st.label} /> : <span />}
+      name={session.title}
+      meta={<When iso={session.last_active_at ?? session.created_at} />}
+      tail={
+        <SessionMenu session={session} split open={menu} onOpenChange={setMenu}>
+          <IconButton label="更多" size="sm">
+            <MoreHorizontal size={ICON.sm} />
+          </IconButton>
+        </SessionMenu>
+      }
+    />
   );
 }

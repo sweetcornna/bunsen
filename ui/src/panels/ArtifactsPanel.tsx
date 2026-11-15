@@ -1,9 +1,9 @@
 import { ArrowLeft, FileBarChart, FileCode2, FileText, Globe, Image as ImageIcon, NotebookText, RefreshCw, Search, Star } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { FilePreview, type Quoted } from "../components/Preview";
-import { cx, Empty, IconButton, Spinner } from "../components/ui";
+import { Badge, Button, Empty, ICON, IconButton, Notice, ScrollArea, Segmented, Spinner, When } from "../components/ui";
 import { api, asApiError, type Artifact, type ArtifactKind, type ResearchRun, type Session } from "../lib/api";
-import { bytes, loadLocal, relTime, saveLocal } from "../lib/format";
+import { bytes, loadLocal, saveLocal } from "../lib/format";
 import { blobUrl } from "../lib/preview";
 
 const KINDS: { id: ArtifactKind; label: string; icon: typeof ImageIcon }[] = [
@@ -14,7 +14,7 @@ const KINDS: { id: ArtifactKind; label: string; icon: typeof ImageIcon }[] = [
   { id: "notebook", label: "Notebook", icon: NotebookText },
   { id: "html", label: "网页", icon: Globe },
 ];
-const ICON = Object.fromEntries(KINDS.map((k) => [k.id, k.icon])) as Record<ArtifactKind, typeof ImageIcon>;
+const KIND_ICON = Object.fromEntries(KINDS.map((k) => [k.id, k.icon])) as Record<ArtifactKind, typeof ImageIcon>;
 
 /** 哪次运行产生了它：按修改时间落在运行的起止之间来推断，所以标“推断”。只在服务端没给出精确对应（a.run）时用。 */
 function producedBy(a: Artifact, runs: ResearchRun[]): ResearchRun | null {
@@ -48,21 +48,25 @@ function originTitle(o: Origin): string {
   return `${o.run_id} 的输出清单里有这个文件（大小一致，内容没有比对）`;
 }
 
-/** 产物预览顶栏和缩略图下面的来源标记。 */
+/**
+ * 产物预览顶栏的来源：一个按钮，点了打开那次运行。一行截断（运行编号截在左侧，保留末尾），完整编号在悬停说明里
+ * （第四期前端遗留，界面统一 5.6）。精确对应写“出自”，按修改时间推断的写“推断”。
+ */
 function OriginBadge({ o, onRun }: { o: Origin; onRun?: (runId: string) => void }) {
-  const label = o.exact ? `出自 ${o.run_id}` : `推断 ${o.run_id}`;
   return (
     <>
       {onRun ? (
-        <button type="button" className={cx("prov", o.exact && "exact")} onClick={() => onRun(o.run_id)} title={originTitle(o)}>
-          <FileCode2 size={11} />
-          {label}
-        </button>
+        <Button size="sm" variant="ghost" className="origin-button" data-origin={o.exact ? "exact" : "inferred"} onClick={() => onRun(o.run_id)} title={originTitle(o)} icon={<FileCode2 size={ICON.sm} />}>
+          <span className="muted">{o.exact ? "出自" : "推断"}</span>{" "}
+          <span className="mono clip-start">
+            <bdi>{o.run_id}</bdi>
+          </span>
+        </Button>
       ) : null}
       {o.exact && o.changed && (
-        <span className="tag warn" title={originTitle(o)}>
+        <Badge tone="warn" title={originTitle(o)}>
           运行之后改过
-        </span>
+        </Badge>
       )}
     </>
   );
@@ -76,6 +80,8 @@ export function ArtifactsPanel({ session, active, runs, onQuote, onRun }: { sess
   const [kind, setKind] = useState<ArtifactKind | "all" | "star">("all");
   const [query, setQuery] = useState("");
   const [open, setOpen] = useState<Artifact | null>(null);
+  const [searchOpen, setSearchOpen] = useState(false);
+  const searchRef = useRef<HTMLInputElement | null>(null);
   const starKey = `bunsen.stars.${session.id}`;
   const [stars, setStars] = useState<string[]>(() => loadLocal<string[]>(starKey, []));
 
@@ -127,11 +133,11 @@ export function ArtifactsPanel({ session, active, runs, onQuote, onRun }: { sess
         onQuote={onQuote}
         left={
           <>
-            <IconButton label="返回" onClick={() => setOpen(null)}>
-              <ArrowLeft size={14} />
+            <IconButton label="返回" size="sm" data-back="" onClick={() => setOpen(null)}>
+              <ArrowLeft size={ICON.sm} />
             </IconButton>
-            <IconButton label={stars.includes(open.path) ? "取消星标" : "星标"} active={stars.includes(open.path)} onClick={() => toggleStar(open.path)}>
-              <Star size={13} fill={stars.includes(open.path) ? "currentColor" : "none"} />
+            <IconButton label={stars.includes(open.path) ? "取消星标" : "星标"} size="sm" active={stars.includes(open.path)} onClick={() => toggleStar(open.path)}>
+              <Star size={ICON.sm} fill={stars.includes(open.path) ? "currentColor" : "none"} />
             </IconButton>
             {origin && <OriginBadge o={origin} onRun={onRun} />}
           </>
@@ -140,43 +146,55 @@ export function ArtifactsPanel({ session, active, runs, onQuote, onRun }: { sess
     );
   }
 
+  const filterOptions = [
+    { value: "all" as const, label: "全部", count: items?.length ?? 0 },
+    ...KINDS.filter((k) => counts[k.id]).map((k) => ({ value: k.id, label: k.label, count: counts[k.id] })),
+    ...(stars.length > 0 ? [{ value: "star" as const, label: <Star size={ICON.xs} aria-label="星标" />, count: stars.length, title: "星标" }] : []),
+  ];
   return (
     <div className="panel">
-      <div className="panel-bar wrap">
-        <div className="filters">
-          <button type="button" className={cx("filter", kind === "all" && "on")} onClick={() => setKind("all")}>
-            全部 <i>{items?.length ?? 0}</i>
-          </button>
-          {KINDS.filter((k) => counts[k.id]).map((k) => (
-            <button key={k.id} type="button" className={cx("filter", kind === k.id && "on")} onClick={() => setKind(k.id)}>
-              {k.label} <i>{counts[k.id]}</i>
-            </button>
-          ))}
-          {stars.length > 0 && (
-            <button type="button" className={cx("filter", kind === "star" && "on")} onClick={() => setKind("star")}>
-              <Star size={11} /> <i>{stars.length}</i>
-            </button>
-          )}
+      {/* 工具栏一行：筛选是分段控件；放不下时搜索框收成图标 */}
+      <div className="panel-bar art-toolbar">
+        <div className="art-toolbar-row">
+          <div className="art-filter">
+            <Segmented<ArtifactKind | "all" | "star"> label="按类型筛选" value={kind} onChange={setKind} options={filterOptions} />
+          </div>
+          <span className="grow" />
+          <input className="input art-search" data-open={searchOpen || query ? "" : undefined} value={query} placeholder="筛选" aria-label="按路径筛选产物" onChange={(e) => setQuery(e.target.value)} onBlur={() => setSearchOpen(false)} ref={searchRef} />
+          <IconButton
+            label="筛选"
+            size="sm"
+            className="art-search-toggle"
+            onClick={() => {
+              setSearchOpen(true);
+              requestAnimationFrame(() => searchRef.current?.focus());
+            }}
+          >
+            <Search size={ICON.sm} />
+          </IconButton>
+          <IconButton label="刷新" size="sm" onClick={() => void load()}>
+            {loading ? <Spinner size={ICON.sm} /> : <RefreshCw size={ICON.sm} />}
+          </IconButton>
         </div>
-        <span className="grow" />
-        <label className="mini-search">
-          <Search size={12} />
-          <input value={query} placeholder="筛选" onChange={(e) => setQuery(e.target.value)} />
-        </label>
-        <IconButton label="刷新" onClick={() => void load()}>
-          {loading ? <Spinner size={13} /> : <RefreshCw size={13} />}
-        </IconButton>
       </div>
-      {err && <div className="note err">{err}</div>}
-      <div className="scroll grow">
-        {items && shown.length === 0 && <Empty icon={<ImageIcon size={20} />} title={items.length === 0 ? "还没有产物" : "没有匹配项"} />}
+      {err && (
+        <div className="panel-notices">
+          <Notice tone="err">{err}</Notice>
+        </div>
+      )}
+      <ScrollArea className="panel-body">
+        {items && shown.length === 0 && <Empty icon={<ImageIcon size={ICON.lg} />} title={items.length === 0 ? "还没有产物" : "没有匹配项"} />}
         <div className="art-grid">
           {shown.map((a) => (
             <ArtifactTile key={a.path} sessionId={session.id} a={a} starred={stars.includes(a.path)} origin={originOf(a, runs)} onOpen={() => setOpen(a)} />
           ))}
         </div>
-        {truncated && <div className="note">只列出最近的 {items?.length} 个</div>}
-      </div>
+        {truncated && (
+          <div className="panel-notices">
+            <Notice>只列出最近的 {items?.length} 个</Notice>
+          </div>
+        )}
+      </ScrollArea>
     </div>
   );
 }
@@ -184,7 +202,7 @@ export function ArtifactsPanel({ session, active, runs, onQuote, onRun }: { sess
 function ArtifactTile({ sessionId, a, starred, origin, onOpen }: { sessionId: string; a: Artifact; starred: boolean; origin: Origin | null; onOpen: () => void }) {
   const ref = useRef<HTMLButtonElement | null>(null);
   const [thumb, setThumb] = useState<string | null>(null);
-  const Icon = ICON[a.kind];
+  const Icon = KIND_ICON[a.kind];
   const wantsThumb = a.kind === "image" && a.size <= 6 * 1024 * 1024;
 
   // 滚到眼前才取缩略图。
@@ -211,17 +229,30 @@ function ArtifactTile({ sessionId, a, starred, origin, onOpen }: { sessionId: st
   const dir = a.path.includes("/") ? a.path.slice(0, a.path.lastIndexOf("/")) : "";
   return (
     <button ref={ref} type="button" className="art" onClick={onOpen} title={a.path}>
-      <div className={cx("art-thumb", a.kind)}>
-        {thumb ? <img src={thumb} alt="" loading="lazy" /> : <Icon size={22} strokeWidth={1.4} />}
-        {starred && <Star size={11} className="art-star" fill="currentColor" />}
-        {origin?.exact && origin.changed && <span className="art-flag">运行之后改过</span>}
+      <div className="art-thumb" data-kind={a.kind}>
+        {thumb ? <img src={thumb} alt="" loading="lazy" /> : <Icon size={ICON.lg} />}
+        {starred && <Star size={ICON.xs} className="art-star" fill="currentColor" aria-label="已星标" />}
+        {origin?.exact && origin.changed && (
+          <Badge tone="warn" className="art-badge">
+            运行之后改过
+          </Badge>
+        )}
       </div>
       <div className="art-name ellipsis">{a.name}</div>
+      {/* 出处：运行编号（等宽），截断在左侧 */}
       <div className="art-meta">
-        <span className="ellipsis" title={origin ? originTitle(origin) : undefined}>
-          {origin ? (origin.exact ? `出自 ${origin.run_id}` : `推断 ${origin.run_id}`) : dir || bytes(a.size)}
-        </span>
-        <span>{relTime(a.mtime)}</span>
+        {origin ? (
+          <span className="clip-start" title={originTitle(origin)}>
+            <bdi>
+              {origin.exact ? "出自" : "推断"} <span className="mono">{origin.run_id}</span>
+            </bdi>
+          </span>
+        ) : (
+          <span className="clip-start">
+            <bdi>{dir || bytes(a.size)}</bdi>
+          </span>
+        )}
+        <When iso={a.mtime} />
       </div>
     </button>
   );

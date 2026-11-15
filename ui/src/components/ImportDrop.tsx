@@ -1,8 +1,8 @@
-import { CheckCircle2, ClipboardPaste, FolderOpen, KeyRound, TriangleAlert, UploadCloud, XCircle } from "lucide-react";
+import { CheckCircle2, ClipboardPaste, FolderOpen, KeyRound, UploadCloud, XCircle } from "lucide-react";
 import { useRef, useState, type DragEvent } from "react";
 import { api, type ImportResult } from "../lib/api";
 import { useApp } from "../lib/store";
-import { Button, cx, Spinner } from "./ui";
+import { Button, ICON, Notice, Row, Section, Spinner } from "./ui";
 
 const MAX_FILES = 200;
 const MAX_BYTES = 2 * 1024 * 1024;
@@ -74,7 +74,10 @@ export function ImportDrop({ compact, onDone }: { compact?: boolean; onDone?: (r
   return (
     <div className="import">
       <div
-        className={cx("drop", over && "over", compact && "compact", busy && "busy")}
+        className="dropzone"
+        data-over={over ? "" : undefined}
+        data-compact={compact ? "" : undefined}
+        aria-busy={busy || undefined}
         onDragOver={(e) => {
           e.preventDefault();
           setOver(true);
@@ -82,16 +85,16 @@ export function ImportDrop({ compact, onDone }: { compact?: boolean; onDone?: (r
         onDragLeave={() => setOver(false)}
         onDrop={(e) => void onDrop(e)}
       >
-        <div className="drop-icon">{busy ? <Spinner size={20} /> : <UploadCloud size={22} />}</div>
-        <div className="drop-text">
-          <b>{busy ? "导入并测试中…" : "拖入 SSH 配置"}</b>
-          <span>config · 私钥 · .ssh 目录 · zip</span>
+        <div className="dropzone-icon">{busy ? <Spinner size={ICON.lg} /> : <UploadCloud size={ICON.lg} />}</div>
+        <div className="dropzone-text">
+          <span className="fw-medium">{busy ? "导入并测试中…" : "拖入 SSH 配置"}</span>
+          <span className="muted t-dense">config · 私钥 · .ssh 目录 · zip</span>
         </div>
-        <div className="drop-actions">
-          <Button icon={<FolderOpen size={13} />} onClick={() => inputRef.current?.click()} disabled={busy}>
+        <div className="dropzone-actions">
+          <Button icon={<FolderOpen size={ICON.md} />} onClick={() => inputRef.current?.click()} disabled={busy}>
             选择文件
           </Button>
-          <Button variant="ghost" icon={<ClipboardPaste size={13} />} onClick={() => setPaste((v) => !v)} disabled={busy}>
+          <Button variant="ghost" icon={<ClipboardPaste size={ICON.md} />} onClick={() => setPaste((v) => !v)} disabled={busy} aria-expanded={paste}>
             粘贴配置
           </Button>
         </div>
@@ -109,9 +112,9 @@ export function ImportDrop({ compact, onDone }: { compact?: boolean; onDone?: (r
       </div>
 
       {paste && (
-        <div className="paste">
+        <div className="stack">
           <textarea
-            className="field mono"
+            className="input mono"
             rows={7}
             autoFocus
             spellCheck={false}
@@ -123,7 +126,7 @@ export function ImportDrop({ compact, onDone }: { compact?: boolean; onDone?: (r
             <Button variant="ghost" onClick={() => setPaste(false)}>
               取消
             </Button>
-            <Button variant="primary" loading={busy} disabled={!text.trim()} onClick={() => void run([], text)}>
+            <Button loading={busy} disabled={!text.trim()} onClick={() => void run([], text)}>
               导入
             </Button>
           </div>
@@ -140,42 +143,36 @@ function ImportSummary({ result, onClose }: { result: ImportResult; onClose: () 
   const testOf = (id: string) => result.tests.find((t) => t.server_id === id);
   const nothing = all.length === 0 && result.keys_added.length === 0;
   return (
-    <div className="import-result">
-      <div className="import-result-head">
-        <b>{nothing ? "没有可导入的内容" : `${all.length} 台服务器 · ${result.keys_added.length} 把密钥`}</b>
-        <Button size="sm" variant="ghost" onClick={onClose}>
-          收起
-        </Button>
+    <Section title={nothing ? "没有可导入的内容" : `导入了 ${all.length} 台服务器 · ${result.keys_added.length} 把密钥`} end={<Button size="sm" variant="ghost" onClick={onClose}>收起</Button>}>
+      <div className="list">
+        {all.map(({ s, fresh }) => {
+          const t = testOf(s.id);
+          return (
+            <Row
+              key={s.id}
+              lead={t && !t.ok ? <XCircle size={ICON.md} className="tone-err" /> : <CheckCircle2 size={ICON.md} />}
+              name={
+                <>
+                  <span className="fw-medium">{s.alias}</span>{" "}
+                  <span className="mono muted">
+                    {s.user}@{s.host}
+                    {s.port !== 22 ? `:${s.port}` : ""}
+                  </span>
+                </>
+              }
+              meta={`${fresh ? "新增" : "已更新"}${t ? ` · ${t.ok ? (t.key_used ?? "已连接") : (t.detail ?? "连接失败")}` : ""}`}
+            />
+          );
+        })}
+        {result.keys_added.map((k) => (
+          <Row key={k.name} lead={<KeyRound size={ICON.md} />} name={<><span className="fw-medium">{k.name}</span> <span className="muted">{k.kind}</span></>} meta={<span className="mono">{k.fingerprint}</span>} />
+        ))}
       </div>
-      {all.map(({ s, fresh }) => {
-        const t = testOf(s.id);
-        return (
-          <div key={s.id} className="import-line">
-            {t ? t.ok ? <CheckCircle2 size={14} className="c-ok" /> : <XCircle size={14} className="c-err" /> : <span className="dot mute" />}
-            <b>{s.alias}</b>
-            <span className="mono dim">
-              {s.user}@{s.host}
-              {s.port !== 22 ? `:${s.port}` : ""}
-            </span>
-            <span className="dim">{fresh ? "新增" : "已更新"}</span>
-            {t && <span className={t.ok ? "c-ok" : "c-err"}>{t.ok ? (t.key_used ?? "已连接") : (t.detail ?? "连接失败")}</span>}
-          </div>
-        );
-      })}
-      {result.keys_added.map((k) => (
-        <div key={k.name} className="import-line">
-          <KeyRound size={14} className="dim" />
-          <b>{k.name}</b>
-          <span className="dim">{k.kind}</span>
-          <span className="mono dim ellipsis">{k.fingerprint}</span>
-        </div>
-      ))}
       {result.warnings.map((w, i) => (
-        <div key={i} className="import-line warn">
-          <TriangleAlert size={14} />
-          <span>{w}</span>
-        </div>
+        <Notice key={i} tone="warn">
+          {w}
+        </Notice>
       ))}
-    </div>
+    </Section>
   );
 }

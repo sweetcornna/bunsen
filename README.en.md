@@ -149,6 +149,7 @@ flowchart LR
 - **GPUs** show live usage and who is using each card.
 - **Host notes.** One `~/.bunsen/HOST.md` per server for that machine's rules and pitfalls.
 - **Quoting.** Select text in a file or an artifact and send it along with your message.
+- **Split view.** See several conversations in one window: up to 3 columns × 2 rows (6 panes), each a full terminal with its own message box. Choose "Open in split view" on a conversation in the sidebar, or drag it into the main area; drag the dividers to resize. The side panel follows the focused pane. Shortcuts are Ctrl+Cmd (Ctrl+Alt on Windows and Linux) plus `\` (open to the right), `-` (open below), `]` `[` (switch), `W` (close the pane), `B` (toggle the panel). Below 900 px the grid collapses to one pane.
 
 ## How it works
 

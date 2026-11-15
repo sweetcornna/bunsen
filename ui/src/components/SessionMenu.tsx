@@ -1,13 +1,61 @@
-import { Archive, ArchiveRestore, Copy, Pencil, Pin, PinOff, Square, Trash2 } from "lucide-react";
-import { useState, type ReactNode } from "react";
+import { Archive, ArchiveRestore, Columns2, Copy, Pencil, Pin, PinOff, Square, Trash2 } from "lucide-react";
+import { useRef, useState, type ReactNode } from "react";
 import { api, type Session } from "../lib/api";
 import { copyText } from "../lib/format";
 import { go } from "../lib/route";
+import { openInSplit } from "../lib/splitStore";
 import { useApp } from "../lib/store";
-import { Button, Confirm, Field, Menu, Modal } from "./ui";
+import { Button, Confirm, Dialog, Field, ICON, Menu, type MenuItem } from "./ui";
 
-/** 会话的“更多”菜单：侧栏和会话页头共用。 */
-export function SessionMenu({ session, children, onGone }: { session: Session; children: ReactNode; onGone?: () => void }) {
+/**
+ * 会话的“更多”菜单：侧栏和会话页头共用。split：侧栏用，最前面加“在分屏中打开”。
+ * open/onOpenChange：受控打开（侧栏右键）。
+ */
+export function SessionMenu({
+  session,
+  children,
+  onGone,
+  split,
+  open,
+  onOpenChange,
+}: {
+  session: Session;
+  children: ReactNode;
+  onGone?: () => void;
+  split?: boolean;
+  open?: boolean;
+  onOpenChange?: (v: boolean) => void;
+}) {
+  const { items, dialogs } = useSessionMenu(session, onGone);
+  // 选了“在分屏中打开”：菜单关掉时不把焦点还给侧栏，键盘焦点交给新开的那一格
+  const opened = useRef(false);
+  const toSplit: MenuItem = {
+    label: "在分屏中打开",
+    icon: <Columns2 size={ICON.md} />,
+    onSelect: () => {
+      opened.current = true;
+      openInSplit(session.id);
+    },
+  };
+  return (
+    <>
+      <Menu
+        trigger={children}
+        open={open}
+        onOpenChange={onOpenChange}
+        items={split ? [toSplit, "sep", ...items] : items}
+        onCloseAutoFocus={(e) => {
+          if (opened.current) e.preventDefault();
+          opened.current = false;
+        }}
+      />
+      {dialogs}
+    </>
+  );
+}
+
+/** 会话菜单的条目和它们的对话框（重命名、结束、删除）：分屏小窗的“更多”菜单复用这些条目。 */
+export function useSessionMenu(session: Session, onGone?: () => void): { items: MenuItem[]; dialogs: ReactNode } {
   const setSession = useApp((s) => s.setSession);
   const dropSession = useApp((s) => s.dropSession);
   const toast = useApp((s) => s.toast);
@@ -19,44 +67,41 @@ export function SessionMenu({ session, children, onGone }: { session: Session; c
   const patch = (p: { title?: string; pinned?: boolean; archived?: boolean }) =>
     api.patchSession(session.id, p).then(setSession).catch(fail);
 
-  return (
-    <>
-      <Menu
-        trigger={children}
-        items={[
-          { label: session.pinned ? "取消置顶" : "置顶", icon: session.pinned ? <PinOff size={14} /> : <Pin size={14} />, onSelect: () => void patch({ pinned: !session.pinned }) },
-          {
-            label: "重命名",
-            icon: <Pencil size={14} />,
-            onSelect: () => {
-              setTitle(session.title);
-              setDlg("rename");
-            },
-          },
-          {
-            label: "复制接入命令",
-            icon: <Copy size={14} />,
-            onSelect: () => void copyText(session.attach_cmd).then((ok) => toast(ok ? "ok" : "err", ok ? "已复制" : "复制失败")),
-          },
-          {
-            label: session.archived ? "取消归档" : "归档",
-            icon: session.archived ? <ArchiveRestore size={14} /> : <Archive size={14} />,
-            onSelect: () => void patch({ archived: !session.archived }),
-          },
-          "sep",
-          { label: "结束会话", icon: <Square size={14} />, disabled: !live, danger: true, onSelect: () => setDlg("stop") },
-          { label: "删除记录", icon: <Trash2 size={14} />, danger: true, onSelect: () => setDlg("delete") },
-        ]}
-      />
+  const items: MenuItem[] = [
+    { label: session.pinned ? "取消置顶" : "置顶", icon: session.pinned ? <PinOff size={ICON.md} /> : <Pin size={ICON.md} />, onSelect: () => void patch({ pinned: !session.pinned }) },
+    {
+      label: "重命名",
+      icon: <Pencil size={ICON.md} />,
+      onSelect: () => {
+        setTitle(session.title);
+        setDlg("rename");
+      },
+    },
+    {
+      label: "复制接入命令",
+      icon: <Copy size={ICON.md} />,
+      onSelect: () => void copyText(session.attach_cmd).then((ok) => toast(ok ? "ok" : "err", ok ? "已复制" : "复制失败")),
+    },
+    {
+      label: session.archived ? "取消归档" : "归档",
+      icon: session.archived ? <ArchiveRestore size={ICON.md} /> : <Archive size={ICON.md} />,
+      onSelect: () => void patch({ archived: !session.archived }),
+    },
+    "sep",
+    { label: "结束会话", icon: <Square size={ICON.md} />, disabled: !live, danger: true, onSelect: () => setDlg("stop") },
+    { label: "删除记录", icon: <Trash2 size={ICON.md} />, danger: true, onSelect: () => setDlg("delete") },
+  ];
 
-      <Modal
+  const dialogs = (
+    <>
+      <Dialog
         open={dlg === "rename"}
         onOpenChange={(v) => !v && setDlg(null)}
         title="重命名"
         size="sm"
         footer={
           <>
-            <Button variant="ghost" onClick={() => setDlg(null)}>
+            <Button variant="ghost" data-dialog-cancel="" onClick={() => setDlg(null)}>
               取消
             </Button>
             <Button
@@ -74,7 +119,7 @@ export function SessionMenu({ session, children, onGone }: { session: Session; c
       >
         <Field label="标题">
           <input
-            className="field"
+            className="input"
             autoFocus
             value={title}
             onChange={(e) => setTitle(e.target.value)}
@@ -86,7 +131,7 @@ export function SessionMenu({ session, children, onGone }: { session: Session; c
             }}
           />
         </Field>
-      </Modal>
+      </Dialog>
 
       <Confirm
         open={dlg === "stop"}
@@ -129,4 +174,5 @@ export function SessionMenu({ session, children, onGone }: { session: Session; c
       />
     </>
   );
+  return { items, dialogs };
 }

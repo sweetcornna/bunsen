@@ -4,7 +4,7 @@ import { api, asApiError } from "../lib/api";
 import { bytes } from "../lib/format";
 import { blobUrl, download, extOf, isNumeric, kindOf, parseDelimited, parseNotebook, rawText, type NbCell } from "../lib/preview";
 import { Markdown } from "./Markdown";
-import { cx, Empty, IconButton, Segmented, Spinner } from "./ui";
+import { Empty, ICON, IconButton, Loading, Notice, ScrollArea, Segmented, Table } from "./ui";
 
 export type Quoted = { path: string; text?: string };
 
@@ -57,17 +57,18 @@ export function FilePreview({ sessionId, path, stamp, onQuote, left }: { session
 
   return (
     <div className="panel">
-      <div className="panel-bar">
+      <div className="panel-bar" data-back="">
         {left}
-        <span className="mono ellipsis crumb" title={path}>
-          {path}
+        <span className="panel-crumb clip-start" title={path} data-crumb="">
+          <bdi>{path}</bdi>
         </span>
-        {size !== null && <span className="dim">{bytes(size)}</span>}
+        {size !== null && <span className="panel-meta">{bytes(size)}</span>}
         <span className="grow" />
         {hasSource && text !== null && (
           <Segmented
             value={mode}
             onChange={setMode}
+            label="显示方式"
             options={[
               { value: "view", label: "预览" },
               { value: "source", label: "源码" },
@@ -75,24 +76,28 @@ export function FilePreview({ sessionId, path, stamp, onQuote, left }: { session
           />
         )}
         {onQuote && (
-          <IconButton label="引用到消息" onClick={quote}>
-            <Quote size={13} />
+          <IconButton label="引用到消息" size="sm" onClick={quote}>
+            <Quote size={ICON.sm} />
           </IconButton>
         )}
-        <IconButton label="下载" onClick={() => void download(sessionId, path)}>
-          <Download size={13} />
+        <IconButton label="下载" size="sm" onClick={() => void download(sessionId, path)}>
+          <Download size={ICON.sm} />
         </IconButton>
       </div>
-      {truncated && <div className="note warn">只显示前 512 KB</div>}
-      <div className={cx("scroll grow", (kind === "image" || kind === "pdf") && "stage")}>
+      {truncated && (
+        <div className="panel-notices">
+          <Notice tone="warn">只显示前 512 KB</Notice>
+        </div>
+      )}
+      <ScrollArea className={kind === "image" || kind === "pdf" ? "panel-body stage" : "panel-body"}>
         {err ? (
           <Empty title={err} />
         ) : loading ? (
-          <Empty title={<Spinner />} />
+          <Loading />
         ) : kind === "binary" ? (
           <Empty title={`.${extOf(path)} 不支持预览`} />
         ) : kind === "image" && url ? (
-          <img className={cx("img-view", fit && "fit")} src={url} alt={path} onClick={() => setFit((v) => !v)} />
+          <img className="img-view" data-fit={fit ? "" : undefined} src={url} alt={path} onClick={() => setFit((v) => !v)} />
         ) : kind === "pdf" && url ? (
           <iframe className="frame" src={url} title={path} />
         ) : text === null ? null : mode === "source" || kind === "text" ? (
@@ -106,9 +111,9 @@ export function FilePreview({ sessionId, path, stamp, onQuote, left }: { session
         ) : kind === "notebook" ? (
           <Notebook text={text} />
         ) : (
-          <iframe className="frame light" sandbox="" srcDoc={text} title={path} />
+          <iframe className="frame" data-light="" sandbox="" srcDoc={text} title={path} />
         )}
-      </div>
+      </ScrollArea>
     </div>
   );
 }
@@ -137,7 +142,7 @@ function DataTable({ text, delim }: { text: string; delim: string }) {
   const numeric = head.map((_, c) => body.slice(0, 50).every((r) => r[c] === undefined || r[c] === "" || isNumeric(r[c])));
   return (
     <>
-      <table className="table data">
+      <Table density="panel" className="data-tbl">
         <thead>
           <tr>
             <th className="rownum" />
@@ -160,8 +165,12 @@ function DataTable({ text, delim }: { text: string; delim: string }) {
             </tr>
           ))}
         </tbody>
-      </table>
-      {more && <div className="note">只显示前 {body.length} 行</div>}
+      </Table>
+      {more && (
+        <div className="panel-notices">
+          <Notice>只显示前 {body.length} 行</Notice>
+        </div>
+      )}
     </>
   );
 }
@@ -187,13 +196,13 @@ function Notebook({ text }: { text: string }) {
 function NbCellView({ cell }: { cell: NbCell }) {
   if (cell.type === "markdown")
     return (
-      <div className="nb-md">
+      <div>
         <Markdown text={cell.source} images="link" />
       </div>
     );
   return (
     <div className="nb-cell">
-      <div className="nb-in">
+      <div className="nb-source surface-well">
         <span className="nb-count">[{cell.count ?? " "}]</span>
         <pre>{cell.source}</pre>
       </div>
@@ -203,7 +212,7 @@ function NbCellView({ cell }: { cell: NbCell }) {
         ) : o.kind === "html" ? (
           <iframe key={i} className="nb-frame" sandbox="" srcDoc={FRAME_CSS + o.text} title="output" />
         ) : (
-          <pre key={i} className={cx("nb-out", o.kind === "error" && "err")}>
+          <pre key={i} className="nb-out" data-err={o.kind === "error" ? "" : undefined}>
             {o.text}
           </pre>
         ),

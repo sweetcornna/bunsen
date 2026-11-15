@@ -1,11 +1,11 @@
 // 运行详情里的“环境”“输入”“输出”三节（第四期契约 3.1–3.3、8.2）。
 // 记录都先经 lib/research.ts 整理（envOf、outputsOf、inputsOf），路径预览一律经 lib/paths.ts 的 previewPath。
-import { Copy, FileText, Search } from "lucide-react";
-import { memo, useMemo, useState, type ReactNode } from "react";
-import { cx, Empty, IconButton } from "../components/ui";
+import { Copy, FileText } from "lucide-react";
+import { memo, useMemo, useState } from "react";
+import { Badge, Button, Empty, Fact, Facts, ICON, IconButton, InlineLink, Notice, Table, When } from "../components/ui";
 import type { RkEnv, RkInput, RkOutputs } from "../lib/api";
-import { bytes, copyText, fullTime, relTime } from "../lib/format";
-import { previewPath, type PathCtx } from "../lib/paths";
+import { bytes, copyText } from "../lib/format";
+import { BAD_SEGMENT_WHY, hasBadSegment, previewPath, visiblePath, type PathCtx } from "../lib/paths";
 import { shortHash, sizeText } from "../lib/research";
 import { useApp } from "../lib/store";
 
@@ -17,48 +17,43 @@ const BAD = (file: string) => `${file} 不是研究工具写的格式（可能�
 /** 输出清单一次显示多少行（审查 P4F1-03）。 */
 const PAGE = 200;
 
-function Fact({ label, children }: { label: string; children: ReactNode }) {
-  return (
-    <>
-      <dt>{label}</dt>
-      <dd>{children}</dd>
-    </>
-  );
-}
-
-/** 哈希的一行：前 12 位，悬停看全文；部分哈希、没算哈希另外标出；记录里缺哈希（又没标 unhashed）显示 “—”。 */
+/**
+ * 哈希：前 8 位，悬停看全文（审查 U1-10：给路径列让出宽度）；部分哈希、未算哈希用中性徽标，悬停说明原因；
+ * 记录里缺哈希（又没标 unhashed）显示 “—”。哈希本身不折行，所在的格子放不下时徽标折到下一行。
+ */
 function Hash({ sha, partial, unhashed, partialWhy }: { sha: string | null; partial: boolean; unhashed: boolean; partialWhy: string }) {
-  if (unhashed)
-    return (
-      <span className="tag warn" title="所有输入和输出合计超过 8 GiB 的读取预算，之后的文件没有计算哈希">
-        没算哈希
-      </span>
-    );
-  if (!sha) return <span className="dim">—</span>;
+  if (unhashed) return <Badge title="所有输入和输出合计超过 8 GiB 的读取预算，之后的文件没有计算哈希">未算哈希</Badge>;
+  if (!sha) return <span className="muted">—</span>;
   return (
-    <span className="nowrap">
-      <span className="mono dim" title={sha}>
-        {shortHash(sha)}
+    <span>
+      <span className="mono muted nowrap" title={sha} data-sha="">
+        {sha.slice(0, 8)}
       </span>
       {partial && (
-        <span className="tag" title={partialWhy}>
-          部分
-        </span>
+        <>
+          {" "}
+          <Badge title={partialWhy}>部分哈希</Badge>
+        </>
       )}
     </span>
   );
 }
 
-/** 一个可以预览的路径：能换成工作目录里的路径就给按钮，否则只显示文字，悬停说明为什么不能点。 */
+/**
+ * 一个可以预览的路径：能换成工作目录里的路径就是行内链接（等宽），否则只显示文字，悬停说明为什么不能点。
+ * 首尾带空白或含控制字符的路径显示转义后的样子（\t、\u00a0…），免得看起来像另一个路径（第四期遗留，界面统一 5.6）。
+ */
 function PathCell({ path, rel, onFile, why = "不在工作目录里，不能预览" }: { path: string; rel: string | null; onFile: (path: string) => void; why?: string }) {
-  return rel ? (
-    <button type="button" className="link-btn mono" onClick={() => onFile(rel)} title={`预览 ${rel}`}>
-      <FileText size={11} />
-      {path}
-    </button>
-  ) : (
-    <span className="mono dim" title={why}>
-      {path}
+  if (rel)
+    return (
+      <InlineLink mono data-ev="file" icon={<FileText size={ICON.xs} />} onClick={() => onFile(rel)} title={`预览 ${rel}`}>
+        {path}
+      </InlineLink>
+    );
+  const bad = hasBadSegment(path);
+  return (
+    <span className="muted" title={bad ? BAD_SEGMENT_WHY : why}>
+      {bad ? visiblePath(path) : path}
     </span>
   );
 }
@@ -86,77 +81,74 @@ export const EnvView = memo(function EnvView({ env, bad, meta, live }: { env: Rk
   }
   const gpuNames = env.gpu ? groupNames(env.gpu.names) : [];
   return (
-    <div className="pad">
-      <dl className="facts env-facts">
+    <div className="pad env" data-env="">
+      <Facts>
         <Fact label="解释器">
           {env.python.version || env.python.executable ? (
             <>
-              {env.python.version ? `Python ${env.python.version}` : <span className="dim">版本未知</span>}
-              {env.python.executable && <div className="mono dim">{env.python.executable}</div>}
+              {env.python.version ? `Python ${env.python.version}` : <span className="muted">版本未知</span>}
+              {env.python.executable && <div className="mono muted">{env.python.executable}</div>}
             </>
           ) : (
-            <span className="dim">没找到 Python</span>
+            <span className="muted">没找到 Python</span>
           )}
         </Fact>
         <Fact label="包">
           {env.packages.tool ? (
-            <>
+            <div className="row wrap">
               <span>
                 {env.packages.tool} · {env.packages.lines.length} 行
               </span>
-              {env.packages.truncated && <span className="tag warn">清单超出上限，只记了前面一部分</span>}{" "}
+              {env.packages.truncated && <Badge tone="warn">清单超出上限，只记了前面一部分</Badge>}
               {env.packages.lines.length > 0 && (
-                <button type="button" className="link-btn" onClick={() => setShowPkgs((v) => !v)} aria-expanded={showPkgs}>
+                <Button size="xs" variant="ghost" onClick={() => setShowPkgs((v) => !v)} aria-expanded={showPkgs}>
                   {showPkgs ? "收起清单" : "展开清单"}
-                </button>
+                </Button>
               )}
-            </>
+            </div>
           ) : (
-            <span className="dim">pip、uv、conda 都没有列出包</span>
+            <span className="muted">pip、uv、conda 都没有列出包</span>
           )}
         </Fact>
         <Fact label="显卡">
           {!env.gpu ? (
-            <span className="dim">没有 nvidia-smi</span>
+            <span className="muted">没有 nvidia-smi</span>
           ) : (
             <>
-              {gpuNames.length > 0 ? gpuNames.join("、") : <span className="dim">nvidia-smi 没有列出显卡</span>}
-              <div className="dim">
+              {gpuNames.length > 0 ? gpuNames.join("、") : <span className="muted">nvidia-smi 没有列出显卡</span>}
+              <div className="muted">
                 驱动 {env.gpu.driver ?? "未知"} · CUDA {env.gpu.cuda ?? "未知"}
               </div>
             </>
           )}
         </Fact>
         <Fact label="系统">
-          {[env.os.system, env.os.release].filter(Boolean).join(" ") || <span className="dim">未知</span>}
+          {[env.os.system, env.os.release].filter(Boolean).join(" ") || <span className="muted">未知</span>}
           {env.os.machine && ` · ${env.os.machine}`}
-          {env.os.platform && <div className="mono dim">{env.os.platform}</div>}
+          {env.os.platform && <div className="mono muted">{env.os.platform}</div>}
         </Fact>
-        <Fact label="主机">{env.host || <span className="dim">—</span>}</Fact>
-        <Fact label="采集于">{env.captured_at ? fullTime(env.captured_at) : <span className="dim">—</span>}</Fact>
+        <Fact label="主机">{env.host || <span className="muted">—</span>}</Fact>
+        <Fact label="采集于">{env.captured_at ? <When iso={env.captured_at} /> : <span className="muted">—</span>}</Fact>
         <Fact label="指纹">
           {env.fingerprint ? (
-            <span className="nowrap">
+            <span className="row">
               <span className="mono" title={env.fingerprint}>
                 {shortHash(env.fingerprint)}
               </span>
-              <IconButton label="复制指纹" onClick={() => void copyText(env.fingerprint).then((ok) => toast(ok ? "ok" : "err", ok ? "已复制指纹" : "复制失败"))}>
-                <Copy size={12} />
+              <IconButton label="复制指纹" size="xs" onClick={() => void copyText(env.fingerprint).then((ok) => toast(ok ? "ok" : "err", ok ? "已复制指纹" : "复制失败"))}>
+                <Copy size={ICON.xs} />
               </IconButton>
             </span>
           ) : (
-            <span className="dim">—</span>
+            <span className="muted">—</span>
           )}
-          <div className="dim">解释器版本、包、显卡驱动、CUDA、系统都相同的运行，指纹相同。</div>
+          <div className="muted">解释器版本、包、显卡驱动、CUDA、系统都相同的运行，指纹相同。</div>
         </Fact>
-      </dl>
+      </Facts>
       {showPkgs && (
-        <div className="pkgs">
-          <label className="mini-search">
-            <Search size={12} />
-            <input value={filter} placeholder="筛选包" aria-label="筛选包" onChange={(e) => setFilter(e.target.value)} />
-          </label>
-          <pre className="log pkg-list">{pkgs.join("\n") || "没有匹配的包"}</pre>
+        <div className="stack" data-pkgs="">
+          <input className="input prov-search" value={filter} placeholder="筛选包" aria-label="筛选包" onChange={(e) => setFilter(e.target.value)} />
+          <pre className="log pkg-lines surface-well">{pkgs.join("\n") || "没有匹配的包"}</pre>
         </div>
       )}
     </div>
@@ -174,16 +166,15 @@ export const InputsView = memo(function InputsView({ inputs, meta, paths, onFile
   if (!inputs) return <Empty title="没有输入清单" hint={isNew(meta) ? "meta.json 里没有 inputs。" : OLD_RUN} />;
   if (inputs.length === 0) return <Empty title="没有声明输入" hint="启动时没有用 rk run --in 声明输入。" />;
   return (
-    <div className="table-wrap">
-      <table className="table prov-table">
-        <thead>
-          <tr>
-            <th>路径</th>
-            <th>类型</th>
-            <th>大小</th>
-            <th>sha256</th>
-          </tr>
-        </thead>
+    <Table density="panel" data-prov="inputs">
+      <thead>
+        <tr>
+          <th>路径</th>
+          <th className="shrink">类型</th>
+          <th className="shrink num">大小</th>
+          <th className="shrink">sha256</th>
+        </tr>
+      </thead>
         <tbody>
           {inputs.map((x, i) => (
             <tr key={`${i}:${x.path}`}>
@@ -192,15 +183,15 @@ export const InputsView = memo(function InputsView({ inputs, meta, paths, onFile
                 {x.type === "dir" ? <PathCell path={x.path} rel={null} onFile={onFile} why="目录不能预览" /> : <PathCell path={x.path} rel={previewPath(x.path, "repo", paths)} onFile={onFile} />}
               </td>
               <td className="nowrap">{x.type === "dir" ? `目录${x.files !== null ? ` · ${x.files} 个文件` : ""}` : "文件"}</td>
-              <td className="nowrap dim">{sizeText(x.size, bytes)}</td>
+              <td className="nowrap num muted">{sizeText(x.size, bytes)}</td>
+              {/* sha 列只按哈希的宽度收：徽标放不下时折到下一行，路径列占剩余宽度 */}
               <td>
                 <Hash sha={x.sha256} partial={x.partial} unhashed={x.unhashed} partialWhy={x.type === "dir" ? "目录里超过 10000 个文件，只算了前 10000 个" : "文件超过 256 MiB，只按大小和首尾各 1 MiB 计算"} />
               </td>
             </tr>
           ))}
         </tbody>
-      </table>
-    </div>
+    </Table>
   );
 });
 
@@ -230,49 +221,52 @@ export const OutputsView = memo(function OutputsView({ outputs, bad, meta, live,
   const more = Math.min(PAGE, picked.length - shown.length);
   return (
     <>
-      <div className="prov-head">
+      <div className="prov-head" data-prov-head="">
         <span>
           {outputs.files.length} 个文件
           {outputs.written_at && (
             <>
               {" "}
-              · <span title={fullTime(outputs.written_at)}>{relTime(outputs.written_at) || fullTime(outputs.written_at)}写入</span>
+              · <When iso={outputs.written_at} suffix=" 写入" />
             </>
           )}
         </span>
         {outs.length > 0 && (
-          <span className="dim">
+          <span className="muted">
             声明的输出目录：<span className="mono">{outs.join("、")}</span>
           </span>
         )}
+        <span className="grow" />
         {outputs.files.length > PAGE && (
-          <label className="mini-search">
-            <Search size={12} />
-            <input
-              value={filter}
-              placeholder="筛选路径"
-              aria-label="筛选输出文件的路径"
-              onChange={(e) => {
-                setFilter(e.target.value);
-                setLimit(PAGE);
-              }}
-            />
-          </label>
+          <input
+            className="input prov-search"
+            value={filter}
+            placeholder="筛选路径"
+            aria-label="筛选输出文件的路径"
+            onChange={(e) => {
+              setFilter(e.target.value);
+              setLimit(PAGE);
+            }}
+          />
         )}
       </div>
-      {outputs.truncated && <div className="note warn">超过 5000 个文件，清单只记了前 5000 个。</div>}
+      {outputs.truncated && (
+        <div className="panel-notices">
+          <Notice tone="warn">超过 5000 个文件，清单只记了前 5000 个。</Notice>
+        </div>
+      )}
       {outputs.files.length === 0 ? (
         <Empty title="这次运行没有留下输出文件" />
       ) : picked.length === 0 ? (
         <Empty title="没有匹配的文件" />
       ) : (
-        <div className="table-wrap">
-          <table className="table prov-table">
+        <>
+          <Table density="panel" data-prov="outputs">
             <thead>
               <tr>
                 <th>路径</th>
-                <th>大小</th>
-                <th>sha256</th>
+                <th className="shrink num">大小</th>
+                <th className="shrink">sha256</th>
               </tr>
             </thead>
             <tbody>
@@ -281,20 +275,22 @@ export const OutputsView = memo(function OutputsView({ outputs, bad, meta, live,
                   <td className="cell-path">
                     <PathCell path={f.path} rel={rel} onFile={onFile} />
                   </td>
-                  <td className="nowrap dim">{sizeText(f.size, bytes)}</td>
-                  <td>
+                  <td className="nowrap num muted">{sizeText(f.size, bytes)}</td>
+                  <td className="nowrap">
                     <Hash sha={f.sha256} partial={f.partial} unhashed={f.unhashed} partialWhy="文件超过 256 MiB，只按大小和首尾各 1 MiB 计算" />
                   </td>
                 </tr>
               ))}
             </tbody>
-          </table>
+          </Table>
           {more > 0 && (
-            <button type="button" className={cx("link-btn", "table-more")} onClick={() => setLimit((n) => n + PAGE)}>
-              再显示 {more} 行（已显示 {shown.length} / {picked.length}）
-            </button>
+            <div className="table-foot">
+              <Button size="sm" variant="ghost" data-more="" onClick={() => setLimit((n) => n + PAGE)}>
+                再显示 {more} 行（已显示 {shown.length} / {picked.length}）
+              </Button>
+            </div>
           )}
-        </div>
+        </>
       )}
     </>
   );

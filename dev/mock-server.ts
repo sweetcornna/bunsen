@@ -31,6 +31,10 @@
 // 第 3 次修订（Q14）：/file、/raw 的 path 不 trim，为空或含控制字符（U+0000–U+001F、U+007F–U+009F）回 400 bad_request，同 Rust。
 // - 研究目录是绝对路径：a2abs9 的 .claude/research-home 首行是 /home/dev/work/longtail/research（仍在工作目录里，审查 P4F2-02）。
 // 部署请求带 accept: application/x-ndjson 时逐行流式返回，不带时返回 {session, steps} 或 422 {error, steps}（docs/API.md 部署一节）。
+// 走查用（不是 Bunsen 的接口）：POST /__dev/emit?session=<id>&text=<文字> 给这个会话已连上的代理终端推一段输出，
+// 用来看分屏小窗的“有新输出”点；返回推给了几个终端。
+// POST /__dev/drop?session=<id>&pane=<agent|shell> 从服务端断开这一路已连上的终端（不发 closed 状态，像网络断了），
+// 用来看自动重连时键盘焦点去哪（分屏稿 14.1）；返回断了几路。
 // 只为了在没有 SSH 目标时看界面；真正的实现在 crates/。
 import { join, normalize } from "node:path";
 // 项目名称、研究分支的规则和前端表单共用一份（照 crates/core/src/projects.rs 写的）。
@@ -682,7 +686,12 @@ async function serveStatic(pathname: string): Promise<Response> {
 const BANNER = (title: string) =>
   `\x1b[2J\x1b[H\x1b[2mbunsen · 演示数据\x1b[0m\r\n\r\n\x1b[38;5;173m❯\x1b[0m \x1b[1m${title}\x1b[0m\r\n\r\n\x1b[32m●\x1b[0m 读完 train.py、configs/base.yaml 和上次的 research/STATE.md\r\n\x1b[32m●\x1b[0m 预登记 r03：标签平滑 ε = 0.1，判据 top-1 提升 ≥ 0.5pt（5 个种子）\r\n\x1b[32m●\x1b[0m 基线 3 个种子：\x1b[1m76.4 ± 0.3\x1b[0m\r\n\x1b[33m●\x1b[0m 确认实验在 GPU 2、3 上跑，第 3/5 个种子\r\n\r\n  \x1b[2mseed 1\x1b[0m  77.1    \x1b[2mseed 2\x1b[0m  76.9    \x1b[2mseed 3\x1b[0m  epoch 41/90 \x1b[2m· 剩余约 38 分钟\x1b[0m\r\n\r\n\x1b[2m  等实验结束后我会核对指标、更新结论账本，再继续下一步。\x1b[0m\r\n\r\n\x1b[38;5;173m❯\x1b[0m `;
 
-Bun.serve<{ title: string }, never>({
+// 已连上的代理终端，按会话 id（/__dev/emit 用）。
+const agentTerms = new Map<string, Set<any>>();
+// 已连上的全部终端（/__dev/drop 用）。
+const liveTerms = new Set<any>();
+
+Bun.serve<{ title: string; session: string | null; pane: string | null }, never>({
   hostname: "127.0.0.1",
   port: PORT,
   async fetch(req, server) {
@@ -696,7 +705,21 @@ Bun.serve<{ title: string }, never>({
       if (sid && !sessions.some((s) => s.id === sid)) return fail(404, "not_found", "没有这个对话");
       if (!servers.some((x) => x.id === termSrv)) return fail(404, "not_found", sid ? "这个对话所在的服务器已删除" : "没有这台服务器");
       const title = sid ? `${sessions.find((s) => s.id === sid)?.title ?? sid} · ${url.searchParams.get("pane")}` : `服务器 ${url.searchParams.get("server")} · ${url.searchParams.get("pane")}`;
-      return server.upgrade(req, { data: { title } }) ? (undefined as any) : fail(400, "bad_request", "需要 WebSocket");
+      return server.upgrade(req, { data: { title, session: sid, pane: url.searchParams.get("pane") } }) ? (undefined as any) : fail(400, "bad_request", "需要 WebSocket");
+    }
+    if (p === "/__dev/emit") {
+      const sid = url.searchParams.get("session") ?? "";
+      const text = url.searchParams.get("text") ?? `\r\n\x1b[32m●\x1b[0m 新的输出 ${new Date().toISOString().slice(11, 19)}\r\n`;
+      const socks = [...(agentTerms.get(sid) ?? [])];
+      for (const w of socks) w.send(new TextEncoder().encode(text));
+      return json({ sent: socks.length });
+    }
+    if (p === "/__dev/drop") {
+      const sid = url.searchParams.get("session") ?? "";
+      const pane = url.searchParams.get("pane");
+      const socks = [...liveTerms].filter((w) => w.data.session === sid && (!pane || w.data.pane === pane));
+      for (const w of socks) w.close(1001, "dev drop");
+      return json({ closed: socks.length });
     }
     if (!p.startsWith("/api/")) return serveStatic(p);
     const body = m === "POST" || m === "PUT" || m === "PATCH" ? await req.clone().json().catch(() => ({})) : {};
@@ -997,6 +1020,12 @@ Bun.serve<{ title: string }, never>({
   },
   websocket: {
     open(ws) {
+      liveTerms.add(ws);
+      if (ws.data.session && ws.data.pane === "agent") {
+        const set = agentTerms.get(ws.data.session) ?? new Set();
+        set.add(ws);
+        agentTerms.set(ws.data.session, set);
+      }
       ws.send(JSON.stringify({ type: "status", state: "connecting", detail: null }));
       setTimeout(() => {
         ws.send(JSON.stringify({ type: "status", state: "connected", detail: null }));
@@ -1009,6 +1038,10 @@ Bun.serve<{ title: string }, never>({
       if (msg.type !== "input") return;
       const out = String(msg.data).replace(/\r/g, "\r\n\x1b[36m❯\x1b[0m ").replace(/\x7f/g, "\b \b");
       ws.send(new TextEncoder().encode(out));
+    },
+    close(ws) {
+      liveTerms.delete(ws);
+      if (ws.data.session) agentTerms.get(ws.data.session)?.delete(ws);
     },
   },
 });

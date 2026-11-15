@@ -1,11 +1,11 @@
-import { Activity, Download, KeyRound, MoreHorizontal, NotebookPen, Pencil, Plus, ScanSearch, SquareTerminal, Trash2 } from "lucide-react";
+import { Activity, Download, KeyRound, MoreHorizontal, NotebookPen, Pencil, Plus, ScanSearch, Server as ServerIcon, SquareTerminal, Trash2 } from "lucide-react";
 import { useEffect, useState } from "react";
 import { Markdown } from "../components/Markdown";
 import { ImportDrop } from "../components/ImportDrop";
 import { InstallDialog, ShellDialog } from "../components/InstallDialog";
-import { AgentMark, Button, Confirm, cx, Empty, Field, Menu, Modal, Picker, Pill, Segmented, Spinner } from "../components/ui";
+import { AgentMark, Badge, Button, Confirm, Dialog, Dot, Empty, Field, ICON, IconButton, Loading, Menu, Notice, Page, Picker, Row, Section, Segmented, Spinner, When } from "../components/ui";
 import { api, type Agent, type KeyInfo, type Server, type ServerInput } from "../lib/api";
-import { gb, relTime, serverAddr, serverStatus } from "../lib/format";
+import { gb, serverAddr, serverStatus } from "../lib/format";
 import { go } from "../lib/route";
 import { isLocal, useApp } from "../lib/store";
 import { GpuTable } from "../panels/OverviewPanel";
@@ -16,33 +16,30 @@ export function Servers() {
   const [editing, setEditing] = useState<Server | "new" | null>(null);
 
   return (
-    <div className="page">
-      <div className="page-inner">
-        <header className="page-head">
-          <div>
-            <h1>服务器</h1>
-          </div>
-          <Button icon={<Plus size={13} />} onClick={() => setEditing("new")}>
-            手动添加
-          </Button>
-        </header>
+    <Page
+      title="服务器"
+      data-page="servers"
+      actions={
+        <Button variant="primary" icon={<Plus size={ICON.md} />} onClick={() => setEditing("new")}>
+          添加服务器
+        </Button>
+      }
+    >
+      <ImportDrop compact={servers.length > 0} />
 
-        <ImportDrop compact={servers.length > 0} />
+      {servers.length === 0 ? (
+        <Empty icon={<ServerIcon size={ICON.lg} />} title="还没有服务器" hint="把 ~/.ssh/config 拖到上面导入，或者点“添加服务器”手动填写。" />
+      ) : (
+        <div className="card-list">
+          {servers.map((s) => (
+            <ServerCard key={s.id} server={s} onEdit={() => setEditing(s)} />
+          ))}
+        </div>
+      )}
 
-        {servers.length === 0 ? (
-          <Empty title="还没有服务器" />
-        ) : (
-          <div className="server-list">
-            {servers.map((s) => (
-              <ServerCard key={s.id} server={s} onEdit={() => setEditing(s)} />
-            ))}
-          </div>
-        )}
-
-        {keys.length > 0 && <KeyList keys={keys} />}
-      </div>
+      {keys.length > 0 && <KeyList keys={keys} />}
       {editing && <ServerForm server={editing === "new" ? null : editing} keys={keys} onClose={() => setEditing(null)} />}
-    </div>
+    </Page>
   );
 }
 
@@ -91,108 +88,106 @@ function ServerCard({ server, onEdit }: { server: Server; onEdit: () => void }) 
     }
   };
 
+  // 一行元信息：系统 · 处理器 · 内存 · 磁盘 · tmux · 工具 · 检查时间。tmux 缺失是这一行唯一上色的字。
+  const meta = p ? (
+    <>
+      {[p.os, p.arch, `${p.cpus} 核`, `内存 ${gb(p.mem_free_gb)} / ${gb(p.mem_total_gb)}`, p.disk_home && `磁盘 ${gb(p.disk_home.free_gb)} / ${gb(p.disk_home.total_gb)}`].filter(Boolean).join(" · ")}
+      {" · "}
+      {p.tmux.present ? `tmux ${p.tmux.version ?? ""}` : <span className="tone-err">没有 tmux</span>}
+      {[p.tools.git && `git ${p.tools.git}`, p.tools.python && `python ${p.tools.python}`, p.tools.node && `node ${p.tools.node}`].filter(Boolean).map((t) => ` · ${t}`)}
+      {live > 0 && ` · ${live} 个对话在运行`}
+    </>
+  ) : (
+    <span className="muted">还没探测：在 ⋯ 菜单里点“探测”</span>
+  );
+  const addr = local ? serverAddr(server) : `${serverAddr(server)}${server.proxy_jump ? ` 经 ${server.proxy_jump}` : ""}`;
+
   return (
-    <article className="server-card">
-      <header>
-        <div className="server-name">
-          <b>{server.alias}</b>
-          {local && <span className="tag">本机</span>}
-          <Pill tone={st.tone}>{st.label}</Pill>
-          {live > 0 && <span className="tag accent">{live} 个对话在跑</span>}
-        </div>
-        <div className="row">
-          <Button size="sm" variant="primary" onClick={() => (setDraft({ server_id: server.id }), go("/"))}>
+    <article className="surface-card server-entry" data-server={server.id}>
+      <header className="card-head">
+        <Dot tone={st.dot} label={st.label} />
+        <span className="card-name">{server.alias}</span>
+        <span className={local ? "card-addr" : "card-addr mono"} title={addr}>
+          {addr}
+        </span>
+        {local && <Badge>本机</Badge>}
+        <div className="card-actions">
+          {busy && <Spinner size={ICON.sm} />}
+          <Button size="sm" onClick={() => (setDraft({ server_id: server.id }), go("/"))}>
             新对话
-          </Button>
-          <Button size="sm" icon={<Activity size={12} />} loading={busy === "test"} onClick={() => void test()}>
-            测试
-          </Button>
-          <Button size="sm" icon={<ScanSearch size={12} />} loading={busy === "probe"} onClick={() => void probe()}>
-            探测
-          </Button>
-          <Button size="sm" icon={<SquareTerminal size={12} />} onClick={() => setShell(true)}>
-            终端
           </Button>
           <Menu
             trigger={
-              <button type="button" className="icon-btn" aria-label="更多">
-                <MoreHorizontal size={15} />
-              </button>
+              <IconButton label="更多" size="sm">
+                <MoreHorizontal size={ICON.sm} />
+              </IconButton>
             }
             items={[
-              { label: "主机笔记", icon: <NotebookPen size={14} />, onSelect: () => setNotes(true) },
-              { label: "编辑", icon: <Pencil size={14} />, onSelect: onEdit },
+              { label: "测试连接", icon: <Activity size={ICON.md} />, disabled: busy !== null, onSelect: () => void test() },
+              { label: "探测", icon: <ScanSearch size={ICON.md} />, disabled: busy !== null, onSelect: () => void probe() },
+              { label: "终端", icon: <SquareTerminal size={ICON.md} />, onSelect: () => setShell(true) },
+              { label: "主机笔记", icon: <NotebookPen size={ICON.md} />, onSelect: () => setNotes(true) },
+              "sep",
+              { label: "编辑", icon: <Pencil size={ICON.md} />, onSelect: onEdit },
               // 本机删不掉（契约第 1 节）：不想要它就用 BUNSEN_NO_LOCAL=1 启动。
-              ...(local ? [] : ["sep" as const, { label: "删除", icon: <Trash2 size={14} />, danger: true, onSelect: () => setConfirmDel(true) }]),
+              ...(local ? [] : [{ label: "删除", icon: <Trash2 size={ICON.md} />, danger: true, onSelect: () => setConfirmDel(true) }]),
             ]}
           />
         </div>
       </header>
 
-      {local ? (
-        <div className="server-sub">
-          {serverAddr(server)}
-          {server.last_checked && <span className="dim"> · {relTime(server.last_checked)}检查</span>}
-        </div>
-      ) : (
-        <div className="server-sub mono">
-          {serverAddr(server)}
-          {server.proxy_jump && <span className="dim"> 经 {server.proxy_jump}</span>}
-          <span className="dim sans">
+      {server.status === "offline" || server.status === "auth_failed" ? (
+        <Notice tone={server.status === "offline" ? "err" : "warn"} raw={server.status_detail} hint={server.last_checked ? <When iso={server.last_checked} suffix=" 检查" /> : undefined}>
+          {server.status === "offline" ? "连不上" : "认证失败：换一把密钥，或在服务器上把公钥加进 authorized_keys"}
+        </Notice>
+      ) : null}
+
+      <div className="card-meta" title={typeof meta === "string" ? meta : undefined}>
+        {meta}
+        {!local && (
+          <span className="muted">
             {" · "}
             {server.key ? (
               <>
-                <KeyRound size={11} /> {server.key}
+                <KeyRound size={ICON.xs} /> {server.key}
               </>
             ) : (
               "未指定密钥"
             )}
-            {server.last_checked && ` · ${relTime(server.last_checked)}检查`}
           </span>
+        )}
+        {server.last_checked && server.status === "online" && (
+          <span className="muted">
+            {" · "}
+            <When iso={server.last_checked} suffix=" 检查" />
+          </span>
+        )}
+      </div>
+      {server.note && <div className="card-note">{server.note}</div>}
+
+      {p && (
+        <div className="card-agents" aria-label="Agent">
+          {agents.map((a) => {
+            const on = p.agents[a.id];
+            const present = on?.present ?? false;
+            return (
+              <Button
+                key={a.id}
+                size="xs"
+                variant="ghost"
+                icon={present ? <AgentMark id={a.id} name={a.name} /> : <Download size={ICON.xs} />}
+                onClick={() => setInstall(a)}
+                title={present ? `${a.name} ${on?.version ?? ""}\n${on?.path ?? ""}\n点开可以登录` : `点击安装 ${a.name}`}
+              >
+                {a.name}
+                <span className="muted">{present ? (on?.version ?? "已安装") : "未安装"}</span>
+              </Button>
+            );
+          })}
         </div>
       )}
-      {server.status !== "online" && server.status_detail && <div className="note err">{server.status_detail}</div>}
-      {server.note && <div className="server-note">{server.note}</div>}
 
-      {p ? (
-        <>
-          <div className="server-facts">
-            <span>{p.os}</span>
-            <span>{p.arch}</span>
-            <span>{p.cpus} 核</span>
-            <span>
-              内存 {gb(p.mem_free_gb)} / {gb(p.mem_total_gb)}
-            </span>
-            {p.disk_home && (
-              <span>
-                磁盘 {gb(p.disk_home.free_gb)} / {gb(p.disk_home.total_gb)}
-              </span>
-            )}
-            <span className={p.tmux.present ? undefined : "c-err"}>tmux {p.tmux.present ? (p.tmux.version ?? "") : "缺失"}</span>
-            {p.tools.git && <span>git {p.tools.git}</span>}
-            {p.tools.python && <span>python {p.tools.python}</span>}
-            {p.tools.node && <span>node {p.tools.node}</span>}
-          </div>
-
-          <div className="agent-chips">
-            {agents.map((a) => {
-              const on = p.agents[a.id];
-              const present = on?.present ?? false;
-              return (
-                <button key={a.id} type="button" className={cx("agent-chip", present && "on")} onClick={() => setInstall(a)} title={present ? `${a.name} ${on?.version ?? ""}\n${on?.path ?? ""}\n点开可以登录` : `点击安装 ${a.name}`}>
-                  <AgentMark id={a.id} name={a.name} size={15} />
-                  {a.name}
-                  {present ? <span className="dim">{on?.version ?? "已安装"}</span> : <Download size={11} />}
-                </button>
-              );
-            })}
-          </div>
-
-          {p.gpus.length > 0 && <GpuTable gpus={p.gpus} />}
-        </>
-      ) : (
-        <div className="server-facts dim">未探测</div>
-      )}
+      {p && p.gpus.length > 0 && <GpuTable gpus={p.gpus} />}
 
       <ShellDialog server={server} open={shell} onOpenChange={setShell} />
       {notes && <NotesDialog server={server} onClose={() => setNotes(false)} />}
@@ -253,7 +248,7 @@ function NotesDialog({ server, onClose }: { server: Server; onClose: () => void 
   };
 
   return (
-    <Modal
+    <Dialog
       open
       onOpenChange={(v) => !v && onClose()}
       size="lg"
@@ -262,6 +257,7 @@ function NotesDialog({ server, onClose }: { server: Server; onClose: () => void 
       footer={
         <>
           <Segmented
+            label="笔记显示方式"
             value={mode}
             onChange={setMode}
             options={[
@@ -280,13 +276,13 @@ function NotesDialog({ server, onClose }: { server: Server; onClose: () => void 
       }
     >
       {text === null ? (
-        <Empty title={<Spinner />} />
+        <Loading />
       ) : mode === "edit" ? (
-        <textarea className="field mono notes-edit" value={text} spellCheck={false} autoFocus onChange={(e) => setText(e.target.value)} placeholder={"## 环境\n\n## 数据\n\n## 注意"} />
+        <textarea className="input mono notes-edit" value={text} spellCheck={false} onChange={(e) => setText(e.target.value)} placeholder={"## 环境\n\n## 数据\n\n## 注意"} />
       ) : (
-        <div className="notes-view">{text.trim() ? <Markdown text={text} images="link" /> : <Empty title="空" />}</div>
+        <div className="notes-view">{text.trim() ? <Markdown text={text} images="link" /> : <Empty title="还没有笔记" hint="点“编辑”记下这台机器的环境、数据位置和注意事项。" />}</div>
       )}
-    </Modal>
+    </Dialog>
   );
 }
 
@@ -338,7 +334,7 @@ function ServerForm({ server, keys, onClose }: { server: Server | null; keys: Ke
   };
 
   return (
-    <Modal
+    <Dialog
       open
       onOpenChange={(v) => !v && onClose()}
       title={server ? `编辑 ${server.alias}` : "添加服务器"}
@@ -356,20 +352,20 @@ function ServerForm({ server, keys, onClose }: { server: Server | null; keys: Ke
     >
       <div className="form-grid">
         <Field label="名称">
-          <input className="field" value={f.alias} onChange={set("alias")} placeholder={local ? "local" : "gpu1"} autoFocus spellCheck={false} />
+          <input className="input" value={f.alias} onChange={set("alias")} placeholder={local ? "local" : "gpu1"} spellCheck={false} />
         </Field>
         {!local && (
           <>
             <Field label="用户">
-              <input className="field" value={f.user} onChange={set("user")} placeholder="ubuntu" spellCheck={false} />
+              <input className="input" value={f.user} onChange={set("user")} placeholder="ubuntu" spellCheck={false} />
             </Field>
             <Field label="地址">
-              <input className="field" value={f.host} onChange={set("host")} placeholder="192.168.1.20" spellCheck={false} />
+              <input className="input" value={f.host} onChange={set("host")} placeholder="192.168.1.20" spellCheck={false} />
             </Field>
             <Field label="端口">
-              <input className="field" value={f.port} onChange={set("port")} inputMode="numeric" />
+              <input className="input" value={f.port} onChange={set("port")} inputMode="numeric" />
             </Field>
-            <Field label="密钥" >
+            <Field label="密钥">
               <Picker
                 variant="field"
                 value={f.key || "__none"}
@@ -379,18 +375,18 @@ function ServerForm({ server, keys, onClose }: { server: Server | null; keys: Ke
               />
             </Field>
             <Field label="跳板机（可选）">
-              <input className="field" value={f.proxy_jump} onChange={set("proxy_jump")} placeholder="user@host" spellCheck={false} />
+              <input className="input" value={f.proxy_jump} onChange={set("proxy_jump")} placeholder="user@host" spellCheck={false} />
             </Field>
           </>
         )}
         <Field label="默认工作目录">
-          <input className="field" value={f.default_workdir} onChange={set("default_workdir")} spellCheck={false} />
+          <input className="input" value={f.default_workdir} onChange={set("default_workdir")} spellCheck={false} />
         </Field>
         <Field label="备注（可选）" className={local ? "wide" : undefined}>
-          <input className="field" value={f.note} onChange={set("note")} />
+          <input className="input" value={f.note} onChange={set("note")} />
         </Field>
       </div>
-    </Modal>
+    </Dialog>
   );
 }
 
@@ -399,21 +395,25 @@ function KeyList({ keys }: { keys: KeyInfo[] }) {
   const fail = useApp((s) => s.fail);
   const [del, setDel] = useState<KeyInfo | null>(null);
   return (
-    <section className="keys">
-      <h2>密钥</h2>
-      <div className="key-list">
+    <Section title="密钥" count={keys.length} data-section="keys">
+      <div className="list">
         {keys.map((k) => (
-          <div key={k.name} className="key-row">
-            <KeyRound size={14} className="dim" />
-            <b>{k.name}</b>
-            <span className="dim">{k.kind}</span>
-            <span className="mono dim ellipsis">{k.fingerprint}</span>
-            <span className="grow" />
-            <span className="dim">{k.used_by.join(" · ")}</span>
-            <button type="button" className="icon-btn" aria-label={`删除 ${k.name}`} disabled={k.used_by.length > 0} title={k.used_by.length > 0 ? "还有服务器在用" : "删除"} onClick={() => setDel(k)}>
-              <Trash2 size={13} />
-            </button>
-          </div>
+          <Row
+            key={k.name}
+            data-key={k.name}
+            lead={<KeyRound size={ICON.md} />}
+            name={
+              <>
+                {k.name} <span className="muted">{k.kind}</span> <span className="mono muted t-meta">{k.fingerprint}</span>
+              </>
+            }
+            meta={k.used_by.length > 0 ? `${k.used_by.join(" · ")} 在用` : "没有服务器在用"}
+            tail={
+              <IconButton label={k.used_by.length > 0 ? "还有服务器在用，不能删除" : `删除 ${k.name}`} size="sm" disabled={k.used_by.length > 0} onClick={() => setDel(k)}>
+                <Trash2 size={ICON.sm} />
+              </IconButton>
+            }
+          />
         ))}
       </div>
       <Confirm
@@ -425,6 +425,6 @@ function KeyList({ keys }: { keys: KeyInfo[] }) {
         danger
         onConfirm={() => del && void api.deleteKey(del.name).then(loadKeys).catch(fail)}
       />
-    </section>
+    </Section>
   );
 }

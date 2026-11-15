@@ -3,7 +3,7 @@ import { useEffect, useState } from "react";
 import { api, type Agent, type Server } from "../lib/api";
 import { useApp } from "../lib/store";
 import { TerminalView } from "./Terminal";
-import { Button, cx, Modal, Segmented } from "./ui";
+import { Button, Dialog, ICON, Notice, Row, Segmented } from "./ui";
 
 /** 在服务器上装一个 Agent，并顺手登录。安装跑在 tmux 里，关掉窗口也不会断。 */
 export function InstallDialog({ server, agent, open, onOpenChange }: { server: Server; agent: Agent; open: boolean; onOpenChange: (v: boolean) => void }) {
@@ -54,15 +54,15 @@ export function InstallDialog({ server, agent, open, onOpenChange }: { server: S
   };
 
   return (
-    <Modal
+    <Dialog
       open={open}
       onOpenChange={onOpenChange}
-      size={phase === "run" ? "xl" : "md"}
+      size={phase === "run" ? "lg" : "md"}
       title={present ? `${agent.name} · ${server.alias}` : `在 ${server.alias} 上安装 ${agent.name}`}
       footer={
         phase === "choose" ? (
           <>
-            <Button variant="ghost" onClick={() => onOpenChange(false)}>
+            <Button variant="ghost" data-dialog-cancel="" onClick={() => onOpenChange(false)}>
               取消
             </Button>
             <Button variant="primary" loading={busy} disabled={agent.install.length === 0} onClick={() => void start()}>
@@ -71,11 +71,11 @@ export function InstallDialog({ server, agent, open, onOpenChange }: { server: S
           </>
         ) : (
           <>
-            <div className="foot-note">
-              <b>登录：</b>
+            <div className="grow secondary t-dense">
+              <span className="fw-medium">登录：</span>
               {agent.auth_hint}
             </div>
-            <Button icon={<RefreshCw size={13} />} loading={busy} onClick={() => void recheck()}>
+            <Button icon={<RefreshCw size={ICON.md} />} loading={busy} onClick={() => void recheck()}>
               重新探测
             </Button>
             <Button variant="primary" onClick={() => onOpenChange(false)}>
@@ -86,26 +86,38 @@ export function InstallDialog({ server, agent, open, onOpenChange }: { server: S
       }
     >
       {phase === "choose" ? (
-        <div className="install-choose">
-          {agent.install.length === 0 && <div className="note warn">没有登记安装命令，在设置里补上。</div>}
-          {agent.install.map((m, i) => (
-            <label key={i} className={cx("radio-card", method === i && "on")}>
-              <input type="radio" name="install-method" checked={method === i} onChange={() => setMethod(i)} />
-              <div>
-                <b>{m.label}</b>
-                <code>{m.cmd}</code>
-              </div>
-            </label>
-          ))}
+        <div className="stack">
+          {agent.install.length === 0 && <Notice tone="warn">没有登记安装命令，在设置里补上。</Notice>}
+          <div className="list" role="radiogroup" aria-label="安装方式">
+            {agent.install.map((m, i) => (
+              <Row
+                key={i}
+                multi
+                selected={method === i}
+                onClick={() => setMethod(i)}
+                role="radio"
+                aria-checked={method === i}
+                lead={<span className="status-dot" data-tone={method === i ? "new" : undefined} />}
+                nameClass="wrap"
+                name={
+                  <>
+                    <div className="fw-medium">{m.label}</div>
+                    <div className="mono muted t-meta">{m.cmd}</div>
+                  </>
+                }
+              />
+            ))}
+          </div>
           {agent.docs_url && (
-            <a className="link" href={agent.docs_url} target="_blank" rel="noopener noreferrer">
-              文档 <ExternalLink size={12} />
+            <a href={agent.docs_url} target="_blank" rel="noopener noreferrer">
+              文档 <ExternalLink size={ICON.xs} />
             </a>
           )}
         </div>
       ) : (
-        <div className="install-run">
+        <div className="stack">
           <Segmented
+            label="终端"
             value={tab}
             onChange={(v) => {
               setTab(v);
@@ -116,29 +128,35 @@ export function InstallDialog({ server, agent, open, onOpenChange }: { server: S
               { value: "login", label: "登录终端" },
             ]}
           />
-          <div className="install-term">
+          <div className="dialog-term">
             {!present && (
-              <div className={cx("fill", tab !== "install" && "hidden")}>
+              <div className={tab !== "install" ? "fill hidden" : "fill"}>
                 <TerminalView target={{ server: server.id, pane: "install", agent: agent.id }} />
               </div>
             )}
-            {present && tab === "install" && <div className="note">已安装</div>}
+            {present && tab === "install" && (
+              <div className="fill">
+                <Notice>已安装</Notice>
+              </div>
+            )}
             {loginOpened && (
-              <div className={cx("fill", tab !== "login" && "hidden")}>
+              <div className={tab !== "login" ? "fill hidden" : "fill"}>
                 <TerminalView target={{ server: server.id, pane: "shell" }} autoFocus />
               </div>
             )}
           </div>
         </div>
       )}
-    </Modal>
+    </Dialog>
   );
 }
 
 export function ShellDialog({ server, open, onOpenChange }: { server: Server; open: boolean; onOpenChange: (v: boolean) => void }) {
   return (
-    <Modal open={open} onOpenChange={onOpenChange} size="xl" title={`终端 · ${server.alias}`} >
-      <div className="install-term tall">{open && <TerminalView target={{ server: server.id, pane: "shell" }} autoFocus />}</div>
-    </Modal>
+    <Dialog open={open} onOpenChange={onOpenChange} size="lg" title={`终端 · ${server.alias}`}>
+      <div className="dialog-term" data-tall="">
+        {open && <TerminalView target={{ server: server.id, pane: "shell" }} autoFocus />}
+      </div>
+    </Dialog>
   );
 }
