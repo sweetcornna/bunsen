@@ -339,7 +339,9 @@ mod tests {
             let remote =
                 crate::model::Server { id: "remote1".into(), alias: "srva".into(), source: crate::model::ServerSource::Manual, ..local };
             // 真实 ssh，但只运行本测试的 ProxyCommand；不连接网络或容器。
-            std::fs::write(core.paths().ssh_config(), "Host op-remote1\n  ProxyCommand exec sleep 30\n  ControlMaster no\n").unwrap();
+            // 不写 exec：ssh 自己会在命令前加 exec，OpenSSH 9.x 上再写一个会变成 “exec: exec: not found”，
+            // 代理立刻退出，得到的是“连不上”而不是超时。
+            std::fs::write(core.paths().ssh_config(), "Host op-remote1\n  ProxyCommand sleep 30\n  ControlMaster no\n").unwrap();
             let err = core.exec(&remote, "echo never", Duration::from_secs(1)).await.unwrap_err();
             assert_eq!(err.code, crate::error::Code::Timeout);
             assert_eq!(err.message, "服务器 srva 在 1 秒内没有完成操作");
