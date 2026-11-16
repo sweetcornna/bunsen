@@ -1,5 +1,5 @@
 {
-  "description": "research 插件：会话开始或压缩后重新锚定研究状态；给本插件的子代理注入研究目录与协议位置；研究循环开着时防止无故停下；用户答复后解除“在等用户”；拦截密钥外泄与读取；研究线的状态文件只由持有推进权的机器写",
+  "description": "research 插件：会话开始或压缩后重新锚定研究状态；给本插件的子代理注入研究目录与协议位置；研究循环开着时防止无故停下；用户答复后解除“在等用户”；拦截密钥外泄与读取；研究线的状态文件只由持有推进权的机器写；拦下前台长等待和反复查看进度（等待靠唤醒，不靠轮询）",
   "hooks": {
     "SessionStart": [
       {
@@ -64,6 +64,16 @@
           {
             "type": "command",
             "command": "bash \"${CLAUDE_PLUGIN_ROOT}/hooks/guard-state.sh\"",
+            "timeout": 10
+          }
+        ]
+      },
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash \"${CLAUDE_PLUGIN_ROOT}/hooks/guard-polling.sh\"",
             "timeout": 10
           }
         ]

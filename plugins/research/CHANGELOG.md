@@ -1,5 +1,22 @@
 # 变更记录
 
+## 0.7.0
+
+省 token 与科研数据。起因：服务器上的研究循环花费里，七成以上是“整段上下文重写进缓存”，等待期间的轮询和频繁唤醒让它雪上加霜。
+
+- **等待不轮询，有钩子兜底**。新增 PreToolUse 钩子 `hooks/guard-polling.sh`（只管 Bash，只在研究项目里生效）：前台 `watch`、`tail -f`、30 秒及以上的 `sleep`（含 `while …; do sleep 60; done`）直接拦下；同一会话一小时内第 6 次查看进度（`nvidia-smi`、`gpustat`、`nvitop`、`squeue`、`rk status`）也拦下。放到后台的命令不管；命令里带 `research:allow-wait` 注释时放行；没有 jq、解析不了一律放行。
+- **`rk wait`**：默认状态间隔从 30 分钟改为 60 分钟；新增 `--stall <分钟>`，进程还在但日志和指标长时间不动时提前唤醒，退出码 5（疑似卡住）。`PROJECT.md` 模板和 `/research:start` 的默认状态间隔同步改为 60 分钟。
+- **协议与角色**：等待纪律写明为什么要省、怎么等、被各种退出码唤醒后各做什么；日志只看末尾、结果只看汇总；统筹者派工时控制并行人数，任务说明里写明不轮询；执行者交回不贴原始输出。
+- **科研数据工具**：新增 `skills/protocol/references/data-sources.md`，列出 2026-11 核对过的文献与数据工具（arXiv MCP、Hugging Face MCP、OpenAlex MCP、Asta、Data Commons、K-Dense 的 `paper-lookup` / `database-lookup`、BioMCP、Zotero MCP）、安装命令、密钥要求和注意事项（工具描述占上下文、限制返回量、核对计数、记录数据来源、不装会在第三方执行代码的功能）。
+- **调研员**：优先用结构化工具；核对主张时专门找反证，结论只能是“找到反证 / 未找到（附检索式）/ 不确定”；报告末尾附检索记录。新增只追加的 `sources/searches.md`（union 合并），scaffold 给旧项目补上合并规则。
+- **引用核验**：`rk cite check` 在 Crossref 返回 404 时再查 DataCite（`RK_DATACITE_URL` 可改），Zenodo、Figshare、Dryad、Dataverse 的 DOI 不再被误报为 `not_found`。
+- 测试：`tests/run.sh` 新增 17 项钩子测试；`tests/quality.py` 新增 DataCite 回退和 `--stall` 两组。
+
+### 升级注意
+
+- 研究目录里的 `tools/rk.py` 会在下次 `/research:resume` 时按版本自动升级到 0.7.0。
+- 确实需要短暂前台等待的命令（例如等服务启动），在命令里加注释 `# research:allow-wait`。
+
 ## 0.6.0
 
 第四期的插件部分：研究质量。结论交给用户之前先落盘、再核对；每张图能追到运行、输入和环境；引用核对过原文；计划批准之后的偏离留有记录。只用标准库，兼容 Python 3.9。结构和问题编码见 [docs/records.md](docs/records.md)。

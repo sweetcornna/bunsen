@@ -7,3 +7,4 @@ RUNS.md merge=union
 STATE.md merge=union
 # 摘录只追加；引用元数据按机器分文件。
 sources/excerpts.md merge=union
+sources/searches.md merge=union
