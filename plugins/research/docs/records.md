@@ -1,4 +1,6 @@
-# 研究记录与质量规则（0.6.0）
+# 研究记录与质量规则（0.6.0，0.7.0 补充）
+
+0.7.0 只在两处改动记录规则：`rk cite check` 查不到的 DOI 再查 DataCite（见 4.2）；新增只追加的 `sources/searches.md`（检索记录，union 合并）。`rk wait` 新增 `--stall`，疑似卡住时退出码 5；默认状态间隔改为 60 分钟。其余规则不变。
 
 研究插件 0.6.0（研究工作台 v2 第四期“研究质量”）里 `rk.py`、审计员、钩子和模板对研究记录的约定，是这些规则的权威说明。Bunsen 只透传和展示 `rk` 的结果，接口见 Bunsen `docs/API.md` 第 13 节。
 
@@ -378,7 +380,8 @@ type RkEnv = {
   - 两次请求至少相隔 1 秒，连接加读取的整次请求绝对限时 15 秒、响应体最多 2 MiB，一次最多查 200 个，超出的算 `unchecked`（`skipped` 计数）；
   - 用 `urllib`，自然遵循 `HTTPS_PROXY` 等环境变量；
   - User-Agent 为 `rk/<版本> (research plugin)`，不带任何个人信息。
-- **Crossref**：`GET <RK_CROSSREF_URL 缺省 https://api.crossref.org/works/><URL 编码的 DOI>`。404 → `not_found`；200 → `ok`。
+- **Crossref**：`GET <RK_CROSSREF_URL 缺省 https://api.crossref.org/works/><URL 编码的 DOI>`。200 → `ok`；404 时再查 DataCite（0.7.0 起）。
+- **DataCite**（0.7.0）：`GET <RK_DATACITE_URL 缺省 https://api.datacite.org/dois/><URL 编码的 DOI>`。404 → `not_found`；200 → `ok`，`source` 记为 `datacite`，取 `titles[].title` 第一个非空值、`creators[].name`（最多 20 个）、`publicationYear`、`publisher`（字符串或 `publisher.name`），`retracted` 为 null。Zenodo、Figshare、Dryad、Dataverse 的 DOI 登记在 DataCite。
   - 取 `title[0]`、`author[].given + family`（最多 20 个）、`issued.date-parts[0][0]`、`container-title[0]`；
   - `retracted`：`updated-by` 里有 `type` 或 `update-type` 为 `retraction`、`relation.is-retracted-by` 非空、或标题以 `RETRACTED` 开头，为 true；否则，响应里有 `updated-by` 时为 false，没有时为 null。
 - **arXiv**：`GET <RK_ARXIV_URL 缺省 https://export.arxiv.org/api/query>?id_list=<编号>`，解析 Atom。没有 entry、或 entry 的 id 含 `/api/errors` → `not_found`；否则 `ok`。

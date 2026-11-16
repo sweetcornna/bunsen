@@ -3,7 +3,7 @@
 
     rk id [简称]                               本机代号；给出简称时生成下一个运行 ID（日期-代号-rNN-简称）
     rk run <运行ID> (--prereg 文件... | --explore) [--manual] [--allow-dirty] -- <入口命令>
-    rk wait [运行ID...] [--interval 分钟]      阻塞到全部结束或到状态间隔（后台运行，靠退出通知唤醒）
+    rk wait [运行ID...] [--interval 分钟] [--stall 分钟]   阻塞到全部结束、到状态间隔或疑似卡住（后台运行，靠退出通知唤醒）
     rk done <运行ID> [--fail] [--note 说明]    结束一条手工批次（文献、推导等没有进程的工作）
     rk pull <别名>:<远程研究目录> <运行ID...>  把远程主机上已结束的运行记录（含日志）拉回本机
     rk status [--write] [--json]               所有运行的真实状态；--write 重新生成 RUNS.md
@@ -41,7 +41,7 @@ from collections import namedtuple
 import stat
 import unicodedata
 
-RK_VERSION = "0.6.0"
+RK_VERSION = "0.7.0"
 
 _HOME_ENTRY = Path(os.path.abspath(os.environ.get("RESEARCH_HOME") or Path(__file__).resolve().parent.parent))
 HOME = _HOME_ENTRY.resolve()
@@ -78,6 +78,7 @@ SEVERITY = {v: i for i, v in enumerate(VERDICTS)}
 def valid_run_id(rid):
     return bool(NEW_ID_RE.match(rid) or OLD_ID_RE.match(rid))
 EXIT_OK, EXIT_FAILED, EXIT_USAGE, EXIT_TICK = 0, 1, 2, 3
+EXIT_STALL = 5  # rk wait --stall：进程还在，但日志和指标太久没有变化
 
 
 def redact(text):
@@ -552,6 +553,15 @@ def cmd_pull(a):
 # ---------------------------------------------------------------- wait / status
 
 
+def quiet_minutes(rid):
+    """运行目录里日志和指标最后一次变化距今多少分钟（都不存在时按运行开始算）。"""
+    d = RUNS / rid
+    times = [p.stat().st_mtime for p in (d / "log.txt", d / "metrics.json") if p.exists()]
+    if not times:
+        times = [p.stat().st_mtime for p in (d / "meta.json",) if p.exists()] or [time.time()]
+    return (time.time() - max(times)) / 60
+
+
 def last_log_line(rid, width=160):
     f = RUNS / rid / "log.txt"
     try:
@@ -593,14 +603,25 @@ def cmd_wait(a):
                 cache_drop(line)
                 print(f"注意：研究线 {line} 的推进权已不在本机（{out.get('message')}）。停下对这条线的写入。")
     deadline = time.time() + a.interval * 60
+    stalled = []
     while True:
         states = {rid: state_of(rid) for rid in a.run_ids}
         pending = [r for r, (s, _) in states.items() if s in ("running", "open")]
         if a.run_ids and not pending:
             break
+        if a.stall:
+            stalled = [r for r in pending if states[r][0] == "running" and quiet_minutes(r) >= a.stall]
+            if stalled:
+                break
         if time.time() >= deadline:
             break
         time.sleep(min(a.poll, max(0.1, deadline - time.time())))
+    if stalled:
+        for rid in stalled:
+            print(f"{rid} | 疑似卡住 | 日志和指标已 {quiet_minutes(rid):.0f} 分钟没有变化 | {elapsed(load_meta(rid))} | {last_log_line(rid)}")
+        print("进程还在，但没有新输出。只看一次日志末尾和显卡占用判断是否死锁；确认卡住就停掉它、记录原因、用新 ID 重跑。"
+              "不要因此改成轮询，判断完重新等待。")
+        sys.exit(EXIT_STALL)
     bad = False
     for rid, (s, code) in states.items():
         bad = bad or s in ("failed", "lost")
@@ -2122,7 +2143,7 @@ def query_source(ident):
              source='crossref' if doi else 'arxiv', url=redact(url), checked_at=now(), checked_by=machine_name()[0])
     response = guarded_command([sys.executable, '-B', '-c', _SOURCE_FETCH, url, 'rk/' + RK_VERSION + ' (research plugin)'],
                                HOME, 15, limit=2 * 1024 * 1024 + 1)
-    if response.returncode == 4 and doi: r['status'] = 'not_found'; return r
+    if response.returncode == 4 and doi: return query_datacite(ident, r)  # 数据集、软件的 DOI 多登记在 DataCite
     if response.returncode == 124: raise TimeoutError('引用请求超过 15 秒绝对期限')
     if response.returncode: raise ValueError(response.stderr.decode('utf-8', 'replace') or '引用请求失败')
     body = response.stdout
@@ -2174,6 +2195,35 @@ def query_source(ident):
         year = entry.findtext('a:published', '', ns)[:4]
         r['year'] = int(year) if year.isdigit() else None; r['venue'] = 'arXiv'
         r['retracted'] = True if 'withdrawn' in entry.findtext('x:comment', '', ns).lower() else None
+    return r
+
+
+def query_datacite(ident, r):
+    """Crossref 查不到的 DOI 再查 DataCite（Zenodo、Figshare、Dryad、Dataverse 等）；两边都没有才算 not_found。"""
+    from urllib.parse import quote
+    url = os.environ.get('RK_DATACITE_URL', 'https://api.datacite.org/dois/').rstrip('/') + '/' + quote(ident[4:], safe='')
+    response = guarded_command([sys.executable, '-B', '-c', _SOURCE_FETCH, url, 'rk/' + RK_VERSION + ' (research plugin)'],
+                               HOME, 15, limit=2 * 1024 * 1024 + 1)
+    if response.returncode == 4: r['status'] = 'not_found'; return r
+    if response.returncode == 124: raise TimeoutError('引用请求超过 15 秒绝对期限')
+    if response.returncode: raise ValueError(response.stderr.decode('utf-8', 'replace') or '引用请求失败')
+    if len(response.stdout) > 2 * 1024 * 1024: raise ValueError('引用服务响应超过 2 MiB')
+    payload = json.loads(response.stdout)
+    data = payload.get('data') if isinstance(payload, dict) else None
+    attrs = data.get('attributes') if isinstance(data, dict) else None
+    if not isinstance(attrs, dict): raise ValueError('DataCite data.attributes 必须是对象')
+    titles, creators = attrs.get('titles') or [], attrs.get('creators') or []
+    if not isinstance(titles, list) or any(not isinstance(t, dict) or not isinstance(t.get('title', ''), str) for t in titles):
+        raise ValueError('DataCite titles 格式不对')
+    if not isinstance(creators, list) or any(not isinstance(c, dict) or not isinstance(c.get('name', ''), str) for c in creators):
+        raise ValueError('DataCite creators 格式不对')
+    year, publisher = attrs.get('publicationYear'), attrs.get('publisher')
+    if isinstance(publisher, dict): publisher = publisher.get('name')
+    r.update(source='datacite', url=redact(url), retracted=None,
+             title=next((t['title'] for t in titles if t.get('title')), None),
+             authors=[c['name'] for c in creators if c.get('name')][:20],
+             year=year if type(year) is int else int(year) if isinstance(year, str) and year.isdigit() else None,
+             venue=publisher if isinstance(publisher, str) else None)
     return r
 
 
@@ -3951,9 +4001,10 @@ def main():
     p.add_argument("run_ids", nargs="+")
     p.set_defaults(fn=cmd_pull)
 
-    p = sub.add_parser("wait", help="阻塞到运行结束或到状态间隔；退出码 0 全部成功 / 1 有失败 / 3 到点")
+    p = sub.add_parser("wait", help="阻塞到运行结束、到状态间隔或疑似卡住；退出码 0 全部成功 / 1 有失败 / 3 到点 / 5 疑似卡住")
     p.add_argument("run_ids", nargs="*")
-    p.add_argument("--interval", type=float, default=30, help="状态间隔（分钟），默认 30")
+    p.add_argument("--interval", type=float, default=60, help="状态间隔（分钟），默认 60。每次到点都会唤醒代理、重读整段上下文，宁长勿短")
+    p.add_argument("--stall", type=float, default=0, help="日志和指标连续这么多分钟没变化就提前唤醒（疑似卡住）；默认 0 不检测")
     p.add_argument("--poll", type=float, default=10, help=argparse.SUPPRESS)
     p.set_defaults(fn=cmd_wait)
 
